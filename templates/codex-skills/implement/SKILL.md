@@ -1,343 +1,141 @@
 ---
 name: implement
-description: "Implement a single backlog ticket through a multi-phase pipeline: architect plans (OpenSpec proposal+design+tasks+specs), sr-developer codes in TDD order, sr-reviewer validates (correctness, tests, security, performance). A profile may add custom-* rails. Reads .specrails/local-tickets.json, closes the ticket in place, reports concisely. Use when the user invokes `$implement #N` or `$implement <free-form>`."
+description: "Implement one frozen spec or route multiple specs to an aggregate pipeline, with resumable design, implementation, verification, review, archive and ownership-aware delivery."
 license: MIT
-compatibility: "Codex-native. Uses spawn_agent / send_message / wait_agent (full-history forks, no agent_type / model / reasoning_effort). Per-role instructions live in the rail skills; this orchestrator only routes."
+compatibility: "Codex-native role delegation with explicit handoffs and the installed SpecRails pipeline runtime. Use only capabilities exposed by the host."
 ---
 
-You are the **implement orchestrator**. The user invoked you as a
-multi-agent pipeline. Your job is to load the ticket, delegate to
-the rail skills available in this project, aggregate their
-verdicts, and close the ticket. The role instructions live in
-their own skills — your message to each spawn invokes the right
-role via `$skill_name`.
+You coordinate the implementation. Role skills supply design, coding and review
+instructions; the installed runtime supplies immutable scope, phase status and
+actual verification evidence. A completed valid phase needs no new model call.
 
-**Repository location.** Your working directory may NOT be the source repo.
-`openspec/**`, `.git`, and the source live under `${SPECRAILS_REPO_DIR:-.}`
-(unset ⇒ `.` ⇒ classic in-repo run). Run every `openspec`/`git` CLI command
-from the repo — `(cd "${SPECRAILS_REPO_DIR:-.}" && …)` — and read change
-artefacts under `${SPECRAILS_REPO_DIR:-.}/openspec/...`. The ticket store
-`.specrails/local-tickets.json` is run-state and stays relative to the working
-directory.
+**Input:** `$implement #N`, `$implement #N --yes`, a free-form description, or
+multiple `#N` references. More than one ID routes directly to
+`.codex/skills/batch-implement/SKILL.md` with the original arguments and complete
+frozen context. Do not ask the user to resend or spawn a nested implement.
 
-**This is explicit permission to use `spawn_agent`.** The user
-wants the multi-agent split. Do not collapse the work into a
-single turn.
+## Admission and capabilities
 
-**Each phase MUST be a real `spawn_agent` call.** You are
-*forbidden* from "doing the developer phase inline to save
-time" or "running the architect work directly because the
-ticket looks small". Every phase below is a hard requirement
-to spawn the named role skill via `spawn_agent` +
-`send_message`. If your final report says "local
-implementation" or "did this myself" anywhere, you violated
-this contract.
+Follow the executable pipeline contract above. Initialize the one stable change
+with supplied context, explicit ticket IDs, or a free-form scope request; then
+read `status`. Do not initialize another run on retry or replace frozen requirements
+with live ticket text. OpenSpec lives under `context.artifactRoot`; the compatibility
+path `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/` applies only after resolving
+that variable to artifactRoot. Source/tests use the selected repository ID/path;
+backlog uses `context.backlogPath`, independent of cwd.
 
-The only reason a phase can be skipped is the BLOCKED reply
-path documented per phase (architect / developer can return
-`BLOCKED: …` and you stop). Otherwise: spawn, wait, close,
-move on.
+Discover `.codex/skills/rails/` and require sr-architect, sr-developer and
+sr-reviewer. Validate any explicit profile (`SPECRAILS_PROFILE_PATH`, otherwise the
+project's configured default): schemaVersion 1, baseline trio, routing/default and
+referenced installed roles. Only installed custom-* roles may supplement or fulfill
+a routed task group; they do not bypass the canonical phase gates.
 
-**A `clean` run is NOT finished until the change is archived.**
-Archiving (`openspec archive`) is a hard obligation, not an
-optional epilogue — see Phase 4. If you mark a ticket `done`
-without an archived change under `openspec/changes/archive/`,
-you violated this contract.
+Use the host's actual `spawn_agent`, `send_message` and `wait_agent` signatures.
+Invoke required architect/developer/reviewer roles as real workers and collect their
+terminal outcomes. Full-history forks inherit the current model; do not pass model
+or reasoning overrides unsupported by that fork mode. Report unsupported profile
+model overrides honestly. Use `close_agent` only when that capability exists and
+only after the worker finished; never invent a cleanup tool or interrupt running
+work to simulate completion. Avoid parallel writers in shared candidate roots.
 
-## How the user invokes you
+Every worker receives its `$sr-*` skill and the explicit bounded handoff: runId,
+phase, absolute runtime/context paths, all frozen criteria, repository ownership,
+change/plan/tasks paths, prior outcome and next action. Do not rely on inherited
+conversation memory. A task start, turn limit or process exit alone is not success.
+Continue from durable progress; two continuations without progress become blocked.
 
-- `$implement #N` — implement ticket `N` from
-  `.specrails/local-tickets.json`.
-- `$implement #N --yes` — non-interactive (skip confirmations).
-- `$implement <free-form>` — implement a free-form description
-  (no ticket id; skip the ticket-update step at the end).
+## Durable phases
 
-### Single-ticket only
+`architect → developer → reviewer → archive → ship → ci`
 
-You handle **exactly one** ticket per invocation. If the user
-passes more than one `#N` (e.g. `$implement #5 #6 --yes`), do
-NOT improvise a multi-ticket flow — reply with:
+Follow `status.resumePhase`. Start required work with the helper's
+`phase --phase <phase> --status running`. Record done only after validating actual
+outcomes and runtime gates. Record blocked/failed with a concrete reason; dependent
+phases remain incomplete. Reopening a phase invalidates dependent completion.
+If every phase is valid, report existing completion without new worker calls.
 
-`"$implement runs one ticket at a time. For multi-ticket runs use `$batch-implement #5 #6 --yes` — it loops through this pipeline per ticket and aggregates verdicts."`
+### Architect
 
-and end. Routing multi-ticket invocations through
-`$batch-implement` keeps file-mutation conflicts impossible
-and gives you a single aggregated report.
+Invoke `$sr-architect` with the exact slug and aggregate frozen scope. Use the
+installed official OpenSpec fast-forward workflow. Require proposal, design, specs,
+tasks and medium/high design-confidence.json. Missing/malformed/low confidence
+blocks development; record the unresolved issue and retain artifacts for retry.
+Do not edit a ticket and silently substitute the new description into this run.
+Changed requirements need a newly admitted scope.
 
-## Pipeline (logical phases)
+### Developer
 
-```
-  YOU (orchestrator)
-    │
-    ├─►  PHASE 1: $sr-architect
-    │     produces openspec/changes/<slug>/{proposal,design,tasks,specs}
-    │
-    ├─►  PHASE 2: $sr-developer
-    │     implements every task (tests + docs included per task)
-    │
-    ├─►  PHASE 3: $sr-reviewer
-    │     single reviewer — correctness, TDD/spec, security, performance
-    │
-    └─►  PHASE 4: close ticket + report
-```
+Invoke `$sr-developer` or the validated profile role for each task group. Keep
+source writes in its selected repositories, serialize dependencies/shared files,
+and persist real task progress. A BLOCKED outcome stops downstream phases.
+Scoped checks support development; once all groups are implemented, execute one
+full CI-equivalent check request through the installed helper. Derive actual checks
+from each selected repository and include required cross-repository integration.
+All tasks and current full evidence must pass before recording developer done.
 
-All spawns are **full-history forks**. NEVER pass `agent_type`,
-`model`, or `reasoning_effort` to `spawn_agent` — codex rejects
-the combo and you'll burn a turn on the retry.
+### Reviewer and bounded repair
 
-## Steps (in order)
+Invoke `$sr-reviewer` with complete criteria, candidate inventory and current
+verification receipt. Ordinary review does not archive. Require explicit semantic
+acceptance, safe behavior and required regression coverage; green baseline tests
+with missing implementation are incomplete. Reuse unchanged full verification;
+review edits require one fresh final full request on the resulting candidate.
 
-### 0. Bootstrap + agent discovery
+Read canonical `<context.artifactRoot>/openspec/changes/<slug>/confidence-score.json`.
+Require overall ≥70, security ≥75 and every other aspect ≥60 (or stricter configured
+thresholds), all tasks complete and no unresolved explicit blocker. Missing or
+ambiguous verdicts/scores fail closed. A numeric score never converts a blocked
+security or design finding into clean acceptance.
 
-1. Confirm the repo root with `git -C "${SPECRAILS_REPO_DIR:-.}" rev-parse --show-toplevel`
-   (the source repo is `${SPECRAILS_REPO_DIR:-.}`; unset ⇒ `.`).
-2. Load the ticket (skip for free-form invocations) — the ticket store is
-   run-state, relative to the working directory:
-   `jq '.tickets["<ID>"]' .specrails/local-tickets.json`
-3. **List the installed rail skills**:
-   `ls .codex/skills/rails/`
-   The three core rails (`sr-architect`, `sr-developer`,
-   `sr-reviewer`) are always present and are the only first-party
-   rails. A profile may add user-owned `custom-*` rails; spawn a
-   `custom-*` rail only when it is listed.
-4. State (≤4 lines) the ticket goal and the stack you detected from
-   a quick `ls`/`find`. Do NOT plan files-to-touch — that's the
-   architect's job.
+For concrete recoverable findings, reopen developer and invoke it once with those
+exact findings, then re-review and refresh evidence. An architectural blocker
+returns to architect; do not infer its category from a score range. If the one
+repair round does not resolve acceptance, preserve work and record blocked.
+Only then may the runtime record reviewer done.
 
-### 1. Phase 1 — Architect
+### Archive
 
-- `spawn_agent` (full-history, no agent_type / model /
-  reasoning_effort).
-- `send_message` body (substitute `<TICKET_ID>` and
-  `<TICKET_TITLE>`):
+Run `archive-check` immediately before archiving. Nonzero means stop. After success,
+invoke `$sr-reviewer` with ARCHIVE_ONLY=true and ARCHIVE_AUTHORIZED=true and the
+same explicit handoff, or run the installed official archive workflow directly
+as coordinator. Preserve approved confidence bytes; no rescoring or code changes.
+Confirm the exact active change is gone, its archive exists under
+`<context.artifactRoot>/openspec/changes/archive/<date>-<slug>/` and canonical specs
+synced before `phase --phase archive --status done`. Do not emulate an official
+archive with file moves or accept incomplete-task prompts. A failed archive remains
+resumable; it never closes specs or restarts valid development automatically.
 
-  > `$sr-architect`
-  >
-  > Ticket id: `<TICKET_ID>`
-  > Ticket title: `<TICKET_TITLE>`
-  >
-  > Read `jq '.tickets["<TICKET_ID>"]' .specrails/local-tickets.json`
-  > for the full ticket. Follow the `$sr-architect` skill
-  > instructions exactly.
-  >
-  > Reply with the one-line summary the skill specifies.
+### Delivery and CI
 
-- `wait_agent`. Read the reply. Extract the plan path.
-- `close_agent`. Open the plan file + design.md.
+For `context.ownership.git === "host"`, record ship and ci skipped with the ownership
+reason and return evidence to the host. Do not stage, commit, push or open PRs.
+For Core-owned git, perform only the delivery already authorized by user/settings,
+in each selected repository. `GIT_AUTO=false` and preview disable shipping even if
+Core owns git. Preserve unrelated changes; stage only the reviewed candidate.
+Record actual per-repository commits/PRs and required CI results before phase done.
+Partial delivery stays incomplete. CI retry checks existing delivery, without
+creating duplicate commits or PRs. No authorized delivery means a concrete blocker,
+not a fabricated successful ship phase.
 
-If the architect replied with `BLOCKED: …`, stop the pipeline,
-write that reason into the final report, and exit without
-updating the ticket.
+### Backlog and report
 
-**Design confidence gate.** Read
-`${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/design-confidence.json`
-(the architect writes it as part of its skill). File missing →
-warn and proceed (backward compatible). `high`/`medium` →
-proceed. `low` → **STOP before Phase 2** — implementation is the
-expensive phase and must not run on an unconfident design.
-Report:
+Host-owned backlog remains untouched. Core-owned backlog may close only after all
+required delivery succeeds, current evidence remains valid, and live participating
+ticket requirements still match frozen IDs/descriptions/criteria/repository scope.
+A mismatch leaves that ticket open and reports the conflict. Read/write only
+`context.backlogPath` (fallback context.backlogRoot/.specrails/local-tickets.json),
+preserve unrelated tickets/fields, and apply the store's revision protocol. Workers
+never close tickets. A free-form scope without a real ticket has no ticket mutation.
 
-> `BLOCKED: design confidence low — <blocking_question>`
->
-> Answer the question (edit the ticket description), then re-run
-> `$implement #N`. The OpenSpec artifacts are left in place as a
-> resumable starting point.
+Report run/change, frozen tickets/roots, reused and newly completed phases,
+verification commands, confidence, archive and each repository's actual delivery.
+Distinguish ready-for-host-delivery from delivered. Include concrete remaining
+blockers; no complete/done claim while a required gate or repository is incomplete.
 
-Do NOT update the ticket, do NOT spawn the developer.
+## Preview and apply
 
-### 2. Phase 2 — Developer
-
-There is one developer rail. Unless an active profile routes the
-ticket to a `custom-*` developer that is listed in step 0.3, spawn
-`$sr-developer`.
-
-- `spawn_agent` (full-history).
-- `send_message`:
-
-  > `$sr-developer`
-  >
-  > Ticket id: `<TICKET_ID>`
-  > Plan: `<PLAN_PATH>`
-  >
-  > Follow the `$sr-developer` skill instructions exactly.
-
-- `wait_agent`. Capture file list. `close_agent`.
-
-If the developer returned `BLOCKED: …`, surface it to the user
-in the final report (no review phase, no ticket update).
-
-### 3. Phase 3 — Reviewer
-
-Spawn the single `$sr-reviewer`. It owns every review dimension —
-correctness, TDD/spec completeness, code quality, security, and
-performance — scaled to what the change touches.
-
-- `spawn_agent` (full-history).
-- `send_message`:
-
-  > `$sr-reviewer`
-  >
-  > Ticket id: `<TICKET_ID>`
-  > Plan: `<PLAN_PATH>`
-  > Changed files:
-  > <one per line>
-  >
-  > Follow the `$sr-reviewer` skill instructions exactly.
-
-- `wait_agent`. `close_agent`.
-
-**Verdict** — parse `Score: N/100` and `Verdict: …` from the reply:
-
-- `clean` — score ≥ 70 AND not fix/blocked.
-- `fix needed` — verdict `fix needed: …`, OR score < 70 with no
-  `blocked: …`, OR `blocked: …` with score **in the recoverable
-  range 30-69** (a single developer fix pass can usually clear it).
-- `blocked` — `blocked: …` with score **< 30**. Design-level; a
-  developer pass won't help — the architect needs to re-engage.
-
-### 4. Optional fix loop (single pass only)
-
-If phase 3's verdict is `fix needed`:
-
-- Spawn ONE follow-up developer (`$sr-developer`, or the same
-  `custom-*` developer used in phase 2) with a message that
-  includes the reviewer's `issues[]` array from its confidence
-  artefact.
-- `wait_agent`. `close_agent`.
-- Re-run phase 3. If still `fix needed` or `blocked`, **do not loop
-  again** — surface in the final report.
-
-### 5. Phase 4 — Archive FIRST, then close + report
-
-> **INVARIANT.** A ticket may be marked `done` ONLY if its change is
-> archived (`openspec/changes/archive/<slug>/` exists). A `clean`
-> verdict with an unarchived change is `todo` + `fix needed`, never
-> `done`. Archiving the change and closing the ticket are a single
-> atomic obligation — you cannot satisfy one and skip the other.
-
-**Step A — Archive the OpenSpec change through `$sr-reviewer`
-(mandatory when the verdict is `clean`). Run this BEFORE touching the
-ticket or writing the report.** A change is not done until it is
-archived — this is the codex equivalent of `opsx:archive`, and it MUST
-run. When the overall verdict is `clean`, delegate the final OpenSpec
-close to the reviewer rail so the same agent that validated the change
-performs the lifecycle close:
-
-1. Spawn `$sr-reviewer` one final time (full-history fork).
-2. Send this exact close prompt:
-
-   > `$sr-reviewer`
-   >
-   > ARCHIVE_ONLY=true
-   > ARCHIVE_AUTHORIZED=true
-   > Ticket id: `<TICKET_ID>`
-   > Plan: `<PLAN_PATH>`
-   > Change slug: `<slug>`
-   >
-   > The aggregated reviewer verdict is clean. Follow the
-   > `$sr-reviewer` archive-only instructions exactly: validate the
-   > OpenSpec change, confirm every task is checked, perform the
-   > OpenSpec archive command, and verify the archive landed.
-
-3. `wait_agent`, parse the two-line `Score:` / `Verdict:` reply, and
-   `close_agent`.
-4. Treat any non-clean archive reply as archive failure.
-
-The reviewer rail's archive-only mode must run these checks:
-
-1. Re-confirm every task box in `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/tasks.md`
-   is ticked (`- [x]`) and the change validates:
-   `(cd "${SPECRAILS_REPO_DIR:-.}" && openspec validate "<slug>" --strict)`.
-2. Archive it: `(cd "${SPECRAILS_REPO_DIR:-.}" && openspec archive "<slug>" -y)` — this updates the
-   main specs and moves the change to `${SPECRAILS_REPO_DIR:-.}/openspec/changes/archive/`.
-3. **Verify the archive landed — do NOT assume success.** Confirm
-   `${SPECRAILS_REPO_DIR:-.}/openspec/changes/archive/` now contains the slug
-   (`ls -d "${SPECRAILS_REPO_DIR:-.}"/openspec/changes/archive/*<slug>* 2>/dev/null`) AND that
-   `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/` is gone. If the archive directory is
-   absent, archiving FAILED.
-4. If `openspec validate`, `openspec archive`, or the step-3
-   verification fails: do NOT mark the ticket `done`. Treat the run
-   as `fix needed`, surface the error in the final report, set the
-   report's `Archive:` line to `FAILED`, and leave the ticket
-   `todo`.
-
-Skip archiving only when the verdict is `fix needed` or `blocked` —
-an unsound change must never be archived. In that case set the
-report's `Archive:` line to `skipped (<verdict>)`.
-
-**Step B — Close the ticket + report.** If a ticket id is in play:
-
-- Update `.specrails/local-tickets.json`. Modify only:
-  - `tickets["<ID>"].status` → `"done"` (clean) or `"todo"`
-    (fix needed / blocked)
-  - `tickets["<ID>"].updated_at` → `date -Iseconds`
-  - top-level `revision` → `revision + 1`
-- PRESERVE every other field.
-
-Print the final summary (≤18 lines):
-
-```
-#<N> → done|todo
-Pipeline:  architect → <developer skill(s)> → <reviewer skill(s)>
-Plan:      <path>
-Confidence: <best path> (overall <score>/100)
-Archive:   archived → openspec/changes/archive/<slug>  |  skipped (<verdict>)  |  FAILED
-Files:     <one path per line, capped at 12; truncate beyond>
-Tests:     <ran command, pass/fail>
-Build:     <ran command, ok/fail/n/a>
-Follow-up: <one bullet per item>
-```
-
-## While a sub-agent is running: WAIT, do nothing else
-
-After `spawn_agent` + `send_message`, the only tool you should
-call is `wait_agent`. Do **not**:
-
-- Read files (`sed`, `cat`, `head`, `tail`) for "context to
-  prepare the next phase"
-- Run `find`, `git status`, `git diff`, `npm test`, `ls`, or
-  any other inspection during the wait
-- Spawn additional sub-agents speculatively
-- Try to "save time" by overlapping work
-
-Why:
-
-- The sub-agent is editing files; concurrent reads race with
-  its writes and can return half-written content that
-  poisons your next decision.
-- Each `sed`/`find`/`grep` you run costs tokens. A
-  10-minute developer phase with you reading the codebase
-  every 30s adds up to a real cost increase for no benefit.
-- The next phase's brief is **deterministic** — it only
-  needs the sub-agent's reply. You don't need to pre-scout.
-
-If `wait_agent` returns before the sub-agent is done (e.g.
-timeout on your side), wait again. Do not start
-inspecting.
-
-The only acceptable activity during the wait is your own
-narration — a single short line explaining what you're
-waiting for is fine for the user, but do not chain more
-than one such line per wait.
-
-## What you must NOT do
-
-- **Do NOT handle multi-ticket invocations.** Route them to
-  `$batch-implement` (see "Single-ticket only" above).
-- **Do NOT pass `agent_type`, `model`, or `reasoning_effort`** to
-  `spawn_agent` on full-history forks.
-- **Do NOT inline role instructions** in your messages — each
-  rail skill is the source of truth for what its role does.
-  Your message points the sub-agent at the right skill and
-  passes parameters; the skill body teaches the role.
-- **Do NOT spawn rails that aren't installed** in
-  `.codex/skills/rails/`. The user's wizard selection determines
-  what's available; respect it.
-- **Do NOT skip phases**. Even on trivial tickets, run
-  architect → developer → at-least-one reviewer. A trivial run
-  is still trazabilidad.
-- **Do NOT loop the fix-review more than once**.
-- **Do NOT touch `.claude/agent-memory/`** — codex projects use
-  `.specrails/agent-memory/`.
-- **Do NOT update `.specrails/local-tickets.json`** from inside
-  a sub-agent. Only you (the orchestrator) write that file.
+`--dry-run`/`--preview` uses the runtime preview contract and reports UNVERIFIED
+PREVIEW. Tests on untouched source are baseline evidence only. `--apply` resumes the
+exact existing preview journal, verifies unchanged base/cache and runs checks on
+actual applied source through `apply-preview`; continue the ordinary review,
+confidence and archive gates. Preview never grants shipping/backlog ownership.

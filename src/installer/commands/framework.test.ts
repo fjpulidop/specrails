@@ -169,6 +169,7 @@ describe('framework subcommands (install-framework / assemble)', () => {
 
     it('accepts a safe semver prerelease with build metadata', async () => {
       const version = '5.0.0-beta.1+build.7'
+      writeFileLf(path.join(scriptDir, 'package.json'), JSON.stringify({ version }))
       const out = await runInstallFramework({
         'framework-dir': fwDir,
         provider: 'claude',
@@ -177,6 +178,18 @@ describe('framework subcommands (install-framework / assemble)', () => {
       expect(out.version).toBe(version)
       expect(isDir(path.join(fwDir, version, '.claude', 'agents'))).toBe(true)
     })
+  })
+
+  it('refuses to label current framework bytes with another version during assembly', async () => {
+    await runInstallFramework({ 'framework-dir': fwDir, provider: 'claude', version: '5.0.0' })
+    const workspace = path.join(tmpDir, 'wrong-version-workspace')
+    await expect(runAssemble({ workspace, 'framework-dir': fwDir, provider: 'claude', version: '5.1.0', 'code-root': tmpDir })).rejects.toThrow('refusing to write an inaccurate project version')
+    expect(pathExists(path.join(workspace, '.specrails', 'specrails-version'))).toBe(false)
+  })
+
+  it('refuses to materialize package bytes under a different version label', async () => {
+    await expect(runInstallFramework({ 'framework-dir': fwDir, provider: 'claude', version: '5.1.0' })).rejects.toThrow('cannot materialize framework 5.1.0')
+    expect(pathExists(path.join(fwDir, '5.1.0'))).toBe(false)
   })
 
   describe('runAssemble', () => {
@@ -258,7 +271,8 @@ describe('framework subcommands (install-framework / assemble)', () => {
       await runInstallFramework({ 'framework-dir': fwDir, provider: 'claude', version: '5.0.0' })
       const before = realpathSafe(path.join(fwDir, 'current'))
 
-      // Materialize a new version with --no-swap → current stays put.
+      // Materialize a new version with its matching package; current stays put.
+      writeFileLf(path.join(scriptDir, 'package.json'), JSON.stringify({ version: '6.0.0' }))
       const out = await runInstallFramework({
         'framework-dir': fwDir, provider: 'claude', version: '6.0.0', 'no-swap': true,
       })
@@ -303,6 +317,7 @@ describe('framework subcommands (install-framework / assemble)', () => {
     })
 
     it('swap-current rejects a target missing a provider served by current', async () => {
+      writeFileLf(path.join(scriptDir, 'package.json'), JSON.stringify({ version: '4.11.0' }))
       await runInstallFramework({
         'framework-dir': fwDir,
         provider: 'claude',
@@ -310,6 +325,7 @@ describe('framework subcommands (install-framework / assemble)', () => {
       })
       const before = realpathSafe(path.join(fwDir, 'current'))
 
+      writeFileLf(path.join(scriptDir, 'package.json'), JSON.stringify({ version: '4.12.0' }))
       // Only Kimi is present in the destination. The current Claude framework
       // still has live consumers, so exposing this target would break them.
       await runInstallFramework({
@@ -329,6 +345,7 @@ describe('framework subcommands (install-framework / assemble)', () => {
     })
 
     it('swap-current rejects corrupt managed content even when the stamp exists', async () => {
+      writeFileLf(path.join(scriptDir, 'package.json'), JSON.stringify({ version: '4.12.0' }))
       await runInstallFramework({
         'framework-dir': fwDir,
         provider: 'claude',

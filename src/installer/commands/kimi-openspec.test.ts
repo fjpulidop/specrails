@@ -111,7 +111,7 @@ describe('normalizeKimiOpenSpecSkills', () => {
       force: true,
     })
     expect(() => normalizeKimiOpenSpecSkills(repoRoot, artifactRoot)).toThrow(
-      /required Kimi skill openspec-verify-change/,
+      /required kimi skill openspec-verify-change/,
     )
     // The cleanup phase runs only after the complete inventory validates.
     expect(pathExists(path.join(legacyRoot, 'openspec-apply-change'))).toBe(true)

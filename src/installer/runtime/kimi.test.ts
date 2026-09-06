@@ -325,7 +325,7 @@ describe('Kimi headless invocation', () => {
     }
   })
 
-  it('publishes helper argv, never literal slash text, for headless enrich', () => {
+  it('publishes deterministic install commands and helper argv for headless workflows', () => {
     const contract = JSON.parse(
       readFileSync(path.join(process.cwd(), 'integration-contract.json'), 'utf8'),
     ) as {
@@ -354,8 +354,10 @@ describe('Kimi headless invocation', () => {
             windowsPromptTransport: string
             initialActivationTelemetry: string
             cancellation: string
-            enrichArgs: string[]
-            enrichFromConfigArgs: string[]
+            initArgs: string[]
+            updateArgs: string[]
+            workflowArgs: string[]
+            enrichArgs?: string[]
           }
         }
       }
@@ -401,21 +403,20 @@ describe('Kimi headless invocation', () => {
     expect(cli.windowsPromptTransport).toContain('30000 UTF-16')
     expect(cli.initialActivationTelemetry).toContain('cannot emit')
     expect(cli.cancellation).toContain('forwards SIGINT/SIGTERM/SIGHUP')
-    expect(cli.enrichArgs).toEqual([
+    expect(cli.initArgs).toEqual(['init', '--yes', '--provider', 'kimi'])
+    expect(cli.updateArgs).toEqual(['update', '--provider', 'kimi'])
+    expect(cli.enrichArgs).toBeUndefined()
+    expect(cli.workflowArgs).toEqual([
       KIMI_SKILL_RUNNER_PATH,
       '--skill',
-      'specrails-enrich',
+      '<skill-id>',
       '--model',
-      'k3',
-    ])
-    expect(cli.enrichFromConfigArgs).toEqual([
-      ...cli.enrichArgs,
+      '<model-id>',
       '--args',
-      '--from-config',
+      '<arguments>',
     ])
-    expect([...cli.enrichArgs, ...cli.enrichFromConfigArgs].join(' ')).not.toContain(
-      '/skill:',
-    )
+    expect([...cli.initArgs, ...cli.updateArgs, ...cli.workflowArgs].join(' ')).not.toContain('/skill:')
+
   })
 })
 

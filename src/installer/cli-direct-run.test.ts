@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const packageVersion = (JSON.parse(readFileSync(path.resolve(here, '..', '..', 'package.json'), 'utf8')) as { version: string }).version
 const distCli = path.resolve(here, '..', '..', 'dist', 'installer', 'cli.js')
 
 const maybe = existsSync(distCli) ? describe : describe.skip
@@ -24,13 +25,13 @@ maybe('cli direct-run guard (compiled dist)', () => {
     try {
       const res = spawnSync(
         process.execPath,
-        [distCli, 'install-framework', '--framework-dir', path.join(tmp, 'fw'), '--provider', 'claude', '--version', '9.9.9'],
+        [distCli, 'install-framework', '--framework-dir', path.join(tmp, 'fw'), '--provider', 'claude', '--version', packageVersion],
         { encoding: 'utf8' },
       )
-      expect(res.status).toBe(0)
+      expect(res.status, res.stderr || res.stdout).toBe(0)
       const fw = path.join(tmp, 'fw')
-      expect(existsSync(path.join(fw, '9.9.9', '.claude', 'agents'))).toBe(true)
-      expect(readlinkSync(path.join(fw, 'current'))).toContain('9.9.9')
+      expect(existsSync(path.join(fw, packageVersion, '.claude', 'agents'))).toBe(true)
+      expect(readlinkSync(path.join(fw, 'current'))).toContain(packageVersion)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
@@ -49,12 +50,12 @@ maybe('cli direct-run guard (compiled dist)', () => {
       const linkedCli = path.join(linkRoot, 'dist', 'installer', 'cli.js')
       const res = spawnSync(
         process.execPath,
-        [linkedCli, 'install-framework', '--framework-dir', path.join(tmp, 'fw'), '--provider', 'claude', '--version', '9.9.9'],
+        [linkedCli, 'install-framework', '--framework-dir', path.join(tmp, 'fw'), '--provider', 'claude', '--version', packageVersion],
         { encoding: 'utf8' },
       )
-      expect(res.status).toBe(0)
+      expect(res.status, res.stderr || res.stdout).toBe(0)
       // The old broken guard also exited 0 — the REAL assertion is that work happened.
-      expect(existsSync(path.join(tmp, 'fw', '9.9.9', '.claude', 'agents'))).toBe(true)
+      expect(existsSync(path.join(tmp, 'fw', packageVersion, '.claude', 'agents'))).toBe(true)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
@@ -68,16 +69,16 @@ maybe('cli direct-run guard (compiled dist)', () => {
       const repo = path.join(tmp, 'repo')
       spawnSync(
         process.execPath,
-        [distCli, 'install-framework', '--framework-dir', fw, '--provider', 'claude', '--version', '9.9.9'],
+        [distCli, 'install-framework', '--framework-dir', fw, '--provider', 'claude', '--version', packageVersion],
         { encoding: 'utf8' },
       )
       const res = spawnSync(
         process.execPath,
-        [distCli, 'assemble', '--workspace', ws, '--framework-dir', fw, '--provider', 'claude', '--version', '9.9.9', '--code-root', repo],
+        [distCli, 'assemble', '--workspace', ws, '--framework-dir', fw, '--provider', 'claude', '--version', packageVersion, '--code-root', repo],
         { encoding: 'utf8' },
       )
-      expect(res.status).toBe(0)
-      expect(readFileSync(path.join(ws, '.specrails', 'specrails-version'), 'utf8').trim()).toBe('9.9.9')
+      expect(res.status, res.stderr || res.stdout).toBe(0)
+      expect(readFileSync(path.join(ws, '.specrails', 'specrails-version'), 'utf8').trim()).toBe(packageVersion)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }

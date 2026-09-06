@@ -5,6 +5,13 @@ license: MIT
 compatibility: "Codex-native. Designed to run as a full-history sub-agent fork of the implement orchestrator."
 ---
 
+**Execution scope.** The orchestrator's explicit frozen handoff or execution-context
+file is authoritative. Use all selected repository IDs/paths for source work and
+`context.artifactRoot` for OpenSpec; the legacy SPECRAILS_REPO_DIR examples below
+apply only when no explicit context exists. Preserve the aggregate change slug for
+a batch. Do not reload mutable tickets to replace frozen descriptions. Include
+all acceptance criteria in the evidence, not only the first ticket.
+
 **Repository location.** Your working directory may NOT be the source
 repo. `openspec/**` and the source files named in `tasks.md` (repo-relative
 paths like `src/foo.ts`) live under `${SPECRAILS_REPO_DIR:-.}` — unset ⇒ `.`
@@ -122,6 +129,12 @@ note it in your reply — do not block on the architect.
    they did unless the design explicitly tells you to.
 
 ## Validation gate
+
+Run the gate through the installed pipeline helper `verify --request <json>` so
+its actual command exits and repository fingerprints become a reusable receipt.
+The request lists all required commands with repositoryId, executable, argv and
+cwd; use the frozen handoff repositories. Never invent a receipt or reuse one
+whose status is invalid. Save the receipt path with the developer outcome.
 
 The final task block in `tasks.md` is always the validation gate
 (`## N. Validation gate`). Run it:

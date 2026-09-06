@@ -61,6 +61,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   'init',
   'update',
   'doctor',
+  'pipeline',
   'install-framework',
   'swap-current',
   'assemble',
@@ -72,7 +73,7 @@ const KNOWN_SUBCOMMANDS = new Set([
 if (!KNOWN_SUBCOMMANDS.has(subcommand)) {
   console.error(`Unknown command: ${subcommand}\n`)
   console.error(
-    'Available commands: init, update, doctor, install-framework, swap-current, assemble, version, profile, help',
+    'Available commands: init, update, doctor, install-framework, swap-current, assemble, version, profile, pipeline, help',
   )
   process.exit(1)
 }
@@ -187,6 +188,7 @@ function printUsage() {
 Usage:
   specrails-core init       [--root-dir <path>] [--yes|-y] [--no-tui]  Install into a repository
   specrails-core update     [--only <component>] [--dry-run]           Update an existing installation
+  specrails-core pipeline   <init|status|phase|verify|archive-check|preview|apply-preview> [--context <path>]
   specrails-core doctor                                                 Run health checks
   specrails-core install-framework --framework-dir <path> --provider <value> --version <value>
                                                                         Materialize an offline framework version

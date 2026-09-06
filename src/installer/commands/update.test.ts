@@ -2,18 +2,19 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PrerequisiteError } from '../util/errors.js'
 import { isDir, mkdirp, pathExists, readTextFile, writeFileLf } from '../util/fs.js'
 import { initRepo } from '../util/git.js'
-import { frameworkRoot, resolveArtifacts } from '../util/registry.js'
+import { frameworkRoot, resolveArtifacts, registryPath, readRegistryOrEmpty } from '../util/registry.js'
 import {
   assembleProjectWorkspace,
   ensureCurrentSymlink,
   installFramework,
 } from '../phases/scaffold.js'
 import { KIMI_REQUIRED_OPENSPEC_SKILLS } from './init.js'
+import * as initModule from './init.js'
 import { runUpdate } from './update.js'
 
 async function setupFakeScriptDir(scriptDir: string, version: string): Promise<void> {
@@ -113,6 +114,7 @@ describe('runUpdate', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     process.chdir(prevCwd)
     if (prevScriptDirOverride === undefined) delete process.env.SPECRAILS_CORE_SCRIPT_DIR
     else process.env.SPECRAILS_CORE_SCRIPT_DIR = prevScriptDirOverride
@@ -164,6 +166,89 @@ describe('runUpdate', () => {
     const ws = workspaceFor(repoRoot)
     const stillOld = readTextFile(path.join(ws, '.specrails', 'specrails-version')).trim()
     expect(stillOld).toBe('4.2.0')
+  })
+
+  it('dry-run with a new provider leaves the complete registry byte-identical', async () => {
+    const scriptDir = path.join(tmpDir, 'core')
+    const repoRoot = path.join(tmpDir, 'repo')
+    await setupFakeScriptDir(scriptDir, '5.0.0')
+    await simulateExistingInstall(repoRoot, '4.2.0')
+    process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
+    const before = readTextFile(registryPath(registryHome))
+    await runUpdate({ 'root-dir': repoRoot, provider: 'gemini', 'dry-run': true, relocate: true })
+    expect(readTextFile(registryPath(registryHome))).toBe(before)
+  })
+
+  it('commits the version for an already-registered provider only after successful assembly', async () => {
+    const scriptDir = path.join(tmpDir, 'core')
+    const repoRoot = path.join(tmpDir, 'repo')
+    await setupFakeScriptDir(scriptDir, '5.0.0')
+    await simulateExistingInstall(repoRoot, '4.2.0')
+    process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
+    await runUpdate({ 'root-dir': repoRoot })
+    const entry = Object.values(readRegistryOrEmpty(registryHome).projects)[0]!
+    expect(entry.coreVersion).toBe('5.0.0')
+    expect(entry.providers).toEqual(['claude'])
+  })
+
+  it('restores migrated artifacts, markers, registry and framework pointer on failed assembly', async () => {
+    const scriptDir = path.join(tmpDir, 'core')
+    const repoRoot = path.join(tmpDir, 'repo')
+    await setupFakeScriptDir(scriptDir, '5.0.0')
+    await simulateExistingInstall(repoRoot, '4.2.0')
+    process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
+    const ws = workspaceFor(repoRoot)
+    const retired = path.join(ws, '.claude', 'agents', 'sr-product-manager.md')
+    const custom = path.join(ws, '.claude', 'agents', 'custom-reviewer.md')
+    writeFileLf(retired, 'old working role')
+    writeFileLf(custom, 'user role')
+    const registryBefore = readTextFile(registryPath(registryHome))
+    vi.spyOn(initModule, 'reassembleWorkspaceProviders').mockImplementationOnce(() => {
+      writeFileLf(path.join(ws, '.specrails', 'specrails-version'), '5.0.0')
+      throw new Error('fixture assembly failed')
+    })
+    await expect(runUpdate({ 'root-dir': repoRoot })).rejects.toThrow('fixture assembly failed')
+    expect(readTextFile(retired)).toBe('old working role')
+    expect(readTextFile(custom)).toBe('user role')
+    expect(readTextFile(path.join(ws, '.specrails', 'specrails-version'))).toBe('4.2.0\n')
+    expect(readTextFile(registryPath(registryHome))).toBe(registryBefore)
+    expect(pathExists(path.join(frameworkRoot(registryHome), 'current'))).toBe(false)
+    expect(pathExists(path.join(frameworkRoot(registryHome), '5.0.0'))).toBe(false)
+  })
+
+  it('refreshes all copied in-repo providers before reporting the shared version', async () => {
+    const scriptDir = path.join(tmpDir, 'core-copied')
+    const repoRoot = path.join(tmpDir, 'copied-repo')
+    const fwDir = frameworkRoot(registryHome)
+    mkdirp(repoRoot)
+    await setupFakeScriptDir(scriptDir, '4.2.0')
+    for (const provider of ['claude', 'gemini'] as const) {
+      installFramework({ scriptDir, frameworkDir: fwDir, provider, providerDir: '.' + provider, version: '4.2.0' })
+    }
+    ensureCurrentSymlink(fwDir, '4.2.0')
+    for (const provider of ['claude', 'gemini'] as const) {
+      assembleProjectWorkspace({ workspace: repoRoot, codeRoot: repoRoot, scriptDir, frameworkDir: fwDir, provider, providerDir: '.' + provider, version: '4.2.0', copyStatics: true })
+    }
+    const geminiAgent = path.join(repoRoot, '.gemini', 'agents', 'sr-architect.md')
+    expect(readTextFile(geminiAgent)).toContain('4.2.0-arch')
+    await setupFakeScriptDir(scriptDir, '5.0.0')
+    process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
+    await runUpdate({ 'root-dir': repoRoot, provider: 'claude' })
+    expect(readTextFile(geminiAgent)).toContain('5.0.0-arch')
+    expect(readTextFile(path.join(repoRoot, '.specrails', 'specrails-version')).trim()).toBe('5.0.0')
+    expect(isDir(path.join(fwDir, '4.2.0'))).toBe(true)
+  })
+
+  it('refuses an older CLI before modifying an updated workspace', async () => {
+    const scriptDir = path.join(tmpDir, 'core')
+    const repoRoot = path.join(tmpDir, 'repo')
+    await setupFakeScriptDir(scriptDir, '5.0.0')
+    await simulateExistingInstall(repoRoot, '5.1.0')
+    process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
+    const before = readTextFile(registryPath(registryHome))
+    await expect(runUpdate({ 'root-dir': repoRoot })).rejects.toThrow('Refusing to downgrade')
+    expect(readTextFile(registryPath(registryHome))).toBe(before)
+    expect(readTextFile(path.join(workspaceFor(repoRoot), '.specrails', 'specrails-version'))).toBe('5.1.0\n')
   })
 
   it('preserves reserved paths (profiles + custom-* agents)', async () => {
@@ -461,11 +546,12 @@ describe('runUpdate', () => {
       const ws = workspaceFor(repoRoot)
       // Rules staging is populated (under the workspace).
       expect(pathExists(path.join(ws, '.specrails', 'setup-templates', 'rules', 'general.md'))).toBe(true)
-      // Manifest still bumped to current version.
+      // A component refresh must not claim the entire framework was upgraded.
       const manifest = JSON.parse(
         readTextFile(path.join(ws, '.specrails', 'specrails-manifest.json')),
       )
-      expect(manifest.version).toBe('5.0.0')
+      expect(manifest.version).toBe('4.2.0')
+      expect(result.installedVersion).toBe('4.2.0')
     })
 
     it('--only=agents refreshes only the agents subtree', async () => {

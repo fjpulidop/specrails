@@ -5,6 +5,13 @@ license: MIT
 compatibility: "Codex-native. Designed to run as a full-history sub-agent fork of the implement orchestrator."
 ---
 
+**Execution scope.** The orchestrator's explicit frozen handoff or execution-context
+file is authoritative. Use all selected repository IDs/paths for source work and
+`context.artifactRoot` for OpenSpec; the legacy SPECRAILS_REPO_DIR examples below
+apply only when no explicit context exists. Preserve the aggregate change slug for
+a batch. Do not reload mutable tickets to replace frozen descriptions. Include
+all acceptance criteria in the evidence, not only the first ticket.
+
 You are the **reviewer** in the specrails implement pipeline. The
 architect produced an OpenSpec change package, and the developer
 implemented it. Your job is to validate the **whole** implementation
@@ -101,8 +108,8 @@ For each `## N.` task block in `tasks.md`:
 
 ### 4. Walk the ticket's acceptance criteria
 
-Load `.specrails/local-tickets.json`, read
-`tickets["<ID>"].description`. Map each acceptance criterion
+Read every frozen ticket description/acceptance criterion from the handoff or
+execution context; only legacy runs consult the explicitly resolved ticket store. Map each acceptance criterion
 to evidence in the changed files. Every criterion must have
 at least one of: a passing test, an observable code path, or
 a screenshot/manual-check note in the design's
@@ -136,13 +143,32 @@ re-buys information the pipeline already has. So:
 
 Path:
 
-`.specrails/agent-memory/explanations/YYYY-MM-DD-reviewer-ticket-{TICKET_ID}.confidence-score.json`
+`<context.artifactRoot>/openspec/changes/<slug>/confidence-score.json`
+
+This canonical report is required by the pipeline gate. An optional copy may be
+kept in `.specrails/agent-memory/explanations/` for human history. Score the five
+aspects independently from actual findings; never fill them mechanically from
+the overall score. Keep `overall_score` as a legacy summary alias of `overall`.
 
 (today's date; create parent dir if missing). Shape:
 
 ```json
 {
+  "schema_version": "1",
+  "change": "<slug>",
+  "agent": "reviewer",
+  "scored_at": "<ISO timestamp>",
+  "overall": 0-100,
   "overall_score": 0-100,
+  "aspects": {
+    "type_correctness": 0-100,
+    "pattern_adherence": 0-100,
+    "test_coverage": 0-100,
+    "security": 0-100,
+    "architectural_alignment": 0-100
+  },
+  "notes": { "<aspect>": "<concrete evidence and concerns>" },
+  "flags": [],
   "summary": "<one paragraph>",
   "openspec_artefacts": {
     "proposal_ok": true,
@@ -195,11 +221,18 @@ Scoring guide:
 
 ### 7. Archive the OpenSpec change when authorized
 
+Authorization requires a successful shared pipeline `archive-check` after the
+orchestrator recorded semantic reviewer done. Ordinary review records findings
+and confidence only; it never archives before that combined gate.
+
 Archiving is mandatory for a clean close, but only safe after the
 orchestrator has aggregated all reviewer verdicts. Therefore:
 
 - If the orchestrator prompt includes both `ARCHIVE_ONLY=true` and
-  `ARCHIVE_AUTHORIZED=true`, skip Steps 2-5 of the code review. You are
+  `ARCHIVE_AUTHORIZED=true`, skip Steps 2-6 of the code review. Preserve the
+  canonical confidence report byte-for-byte: the gate authorizes its exact hash.
+  Do not rescore or rewrite archive_status; report archive outcomes through the
+  journal and final reply only. You are
   being invoked only to perform the final OpenSpec close. You must still
   run Step 1, confirm all tasks are checked, run `openspec archive`, and
   verify the archive landed.
@@ -234,7 +267,8 @@ OpenSpec archive failed`.
 ## What you must NOT do
 
 - **Do not** edit any source or test file.
-- **Do not** edit OpenSpec files by hand. The only allowed OpenSpec
+- **Do not** edit OpenSpec design/tasks/specs by hand. Writing the required
+  canonical confidence report during ordinary review is allowed. Lifecycle
   mutation is `openspec archive "<slug>" -y` during Step 7 when
   `ARCHIVE_AUTHORIZED=true` and the verdict is clean.
 - **Do not** update `.specrails/local-tickets.json`. The

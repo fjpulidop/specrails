@@ -23,6 +23,8 @@ describe('buildOpenSpecInvocation', () => {
       'init',
       '--tools',
       'claude',
+      '--profile',
+      'custom',
       repoRoot,
     ])
   })
@@ -33,7 +35,7 @@ describe('buildOpenSpecInvocation', () => {
     }
     const { bin, args } = buildOpenSpecInvocation(repoRoot, 'codex', env, pinned)
     expect(bin).toBe('/usr/local/bin/openspec')
-    expect(args).toEqual(['init', '--tools', 'codex', repoRoot])
+    expect(args).toEqual(['init', '--tools', 'codex', '--profile', 'custom', repoRoot])
   })
 
   it('form 3 (npx): neither set → falls back to pinned npx spec', () => {
@@ -49,6 +51,8 @@ describe('buildOpenSpecInvocation', () => {
       'init',
       '--tools',
       'gemini',
+      '--profile',
+      'custom',
       repoRoot,
     ])
   })

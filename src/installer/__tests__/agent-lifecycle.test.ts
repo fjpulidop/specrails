@@ -181,27 +181,31 @@ function readCodexSkill(relPath: string): string {
 describe('codex implement orchestrator archive contract', () => {
   const content = readCodexSkill(path.join('implement', 'SKILL.md'))
 
-  it('runs `openspec archive <slug> -y`', () => {
-    expect(content).toMatch(/openspec archive .*-y/)
+  it('uses the official archive workflow after the executable approval', () => {
+    expect(content).toContain('archive-check')
+    expect(content).toContain('installed official archive workflow')
+    expect(content).toContain('Preserve approved confidence bytes')
   })
 
-  it('makes archive mandatory on a clean verdict', () => {
-    expect(content).toMatch(/mandatory[\s\S]{0,40}clean/i)
+  it('includes archive and delivery in the durable completion sequence', () => {
+    expect(content).toContain('architect → developer → reviewer → archive → ship → ci')
+    expect(content).toContain('no complete/done claim while a required gate or repository is incomplete')
   })
 
-  it('validates / re-confirms task boxes BEFORE archiving (gate precedes archive)', () => {
-    // Anchor on the exact Phase 5 command strings: a bare `openspec archive`
-    // also appears in the top-of-file contract clause, which would defeat a
-    // loose indexOf comparison.
-    const gateIndex = content.indexOf('openspec validate "<slug>" --strict')
-    const archiveIndex = content.indexOf('openspec archive "<slug>" -y')
+  it('checks approval before authorizing archive-only and recording completion', () => {
+    const gateIndex = content.indexOf('Run `archive-check`')
+    const archiveIndex = content.indexOf('ARCHIVE_ONLY=true')
+    const doneIndex = content.indexOf('phase --phase archive --status done')
     expect(gateIndex).toBeGreaterThanOrEqual(0)
-    expect(archiveIndex).toBeGreaterThanOrEqual(0)
-    expect(gateIndex).toBeLessThan(archiveIndex)
+    expect(archiveIndex).toBeGreaterThan(gateIndex)
+    expect(doneIndex).toBeGreaterThan(archiveIndex)
   })
 
-  it('exposes an Archive field in the mandatory final-report template', () => {
-    expect(content).toMatch(/Archive:\s+archived/)
+  it('closes only the owning backlog after delivery and frozen scope comparison', () => {
+    expect(content).toContain('Host-owned backlog remains untouched')
+    expect(content).toContain('required delivery succeeds')
+    expect(content).toContain('ticket requirements still match frozen')
+    expect(content).toContain('`context.backlogPath`')
   })
 
   it('verifies the archive landed under openspec/changes/archive/<slug>', () => {

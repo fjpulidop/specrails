@@ -24,6 +24,7 @@ import {
 } from './commands/framework.js'
 import { runInit, type InitFlags } from './commands/init.js'
 import { runUpdate, type UpdateFlags } from './commands/update.js'
+import { runPipelineCommand } from './runtime/pipeline-state.js'
 import { isInstallerError } from './util/errors.js'
 import { fatal } from './util/logger.js'
 
@@ -93,6 +94,7 @@ function usageText(): string {
     'Commands:',
     '  init                Install specrails into a repository',
     '  update              Update an existing specrails installation',
+    '  pipeline            Inspect and execute durable implementation phases',
     '  doctor              Diagnose the health of an existing installation',
     '  install-framework   Materialize the versioned framework (offline)',
     '  swap-current        Point framework/current at a version (offline)',
@@ -144,6 +146,8 @@ async function dispatch(
     case 'update':
       await runUpdate(flags as UpdateFlags)
       return 0
+    case 'pipeline':
+      return runPipelineCommand(flags, _positionals)
     case 'doctor': {
       const result = await runDoctor(flags as DoctorFlags)
       return result.failed === 0 ? 0 : 1

@@ -920,6 +920,9 @@ describe('managed Kimi skill runner — secure invocation', () => {
       KIMI_CODE_NO_AUTO_UPDATE: '1',
       KIMI_MODEL_THINKING_EFFORT: 'high',
       SPECRAILS_SAFE: 'yes',
+      SPECRAILS_BACKLOG_ROOT: tmpDir,
+      SPECRAILS_BACKLOG_PATH: path.join(tmpDir, '.specrails', 'local-tickets.json'),
+      SPECRAILS_PIPELINE_RUNTIME: path.join(tmpDir, '.specrails', 'runtime', 'pipeline.mjs'),
     })
     expect(args).toContain('kimi-code/k3')
     expect(args.join('\n')).toContain('$(touch never-created)')
@@ -1283,6 +1286,58 @@ describe('managed Kimi skill runner — secure invocation', () => {
     for (const executionCwd of executionCwds) {
       expect(existsSync(executionCwd)).toBe(false)
     }
+  })
+
+  it.each(['host', 'standalone'] as const)('preserves %s frozen scope and shared backlog in a private current-role cwd', async (mode) => {
+    const repo = createWaveRepo('shared-backlog-role-' + mode)
+    const providerRoot = writeSkill('backlog-role', 'Use frozen specs and SPECRAILS_BACKLOG_PATH')
+    const workspace = path.join(tmpDir, 'external-backlog-workspace-' + mode)
+    const backlog = path.join(workspace, '.specrails', 'local-tickets.json')
+    writeFileLf(backlog, JSON.stringify({ tickets: { '17': { title: 'API and UI' } } }))
+    const contextPath = path.join(workspace, mode === 'standalone' ? '.specrails/pipeline-context.json' : 'context.json')
+    const frozen = JSON.stringify({ schemaVersion: 1, runId: 'shared-backlog-role',
+      backlogRoot: workspace, artifactRoot: repo, artifactRepositoryId: 'api',
+      repositories: [{ id: 'api', name: 'API', path: repo }, { id: 'ui', name: 'UI', path: workspace }],
+      ownership: { git: 'host', backlog: 'host', worktrees: 'host' },
+      specs: [{ id: 17, title: 'API and UI', description: 'Complete frozen criteria', repositoryIds: ['api', 'ui'] }] })
+    writeFileLf(contextPath, frozen)
+    writeRoleWave(workspace, { run: 'shared-backlog-role', roles: [{ key: 'developer', skill: 'backlog-role', model: 'k3', args: 'ticket 17', workspace: 'current' }] })
+    let childCwd = ''
+    const code = await runner.runSkillCli(['--role-wave-file', '.specrails/kimi-role-wave.json'], {
+      scriptPath: path.join(providerRoot, 'specrails', 'run-skill.mjs'), cwd: workspace,
+      platform: 'linux', env: mode === 'host' ? { SPECRAILS_EXECUTION_CONTEXT: contextPath } : {},
+      signalSource: new EventEmitter(), tempRoot: path.join(tmpDir, 'shared-backlog-temp'), writeOutput: () => {},
+      spawnChild: (_command: string, _args: string[], rawOptions: Record<string, unknown>) => {
+        const options = rawOptions as { cwd: string; env: Record<string, string> }
+        childCwd = options.cwd
+        const addDirs = _args.flatMap((arg, index) => arg === '--add-dir' ? [_args[index + 1]!] : [])
+        expect(addDirs.map(canonicalPathIdentity)).toContain(canonicalPathIdentity(workspace))
+        expect(addDirs.map(canonicalPathIdentity)).toContain(canonicalPathIdentity(repo))
+        expect(childCwd).not.toBe(workspace)
+        expect(JSON.parse(readFileSync(options.env.SPECRAILS_BACKLOG_PATH!, 'utf8')).tickets['17'].title).toBe('API and UI')
+        expect(readFileSync(options.env.SPECRAILS_EXECUTION_CONTEXT!, 'utf8')).toBe(frozen)
+        expect(options.env.SPECRAILS_PIPELINE_RUNTIME).toBe(path.join(workspace, '.specrails', 'runtime', 'pipeline.mjs'))
+        return createRoleChild(0, { content: 'done' })
+      },
+    })
+    expect(code).toBe(0)
+    expect(childCwd).not.toBe('')
+    expect(readFileSync(contextPath, 'utf8')).toBe(frozen)
+  })
+
+  it('rejects sibling worktrees for host-owned context before spawning', async () => {
+    const repo = createWaveRepo('host-context-worktree')
+    const providerRoot = writeSkill('host-role', 'Do not create worktrees')
+    const contextPath = path.join(repo, 'context.json')
+    writeFileLf(contextPath, JSON.stringify({ schemaVersion: 1, backlogRoot: repo, ownership: { worktrees: 'host' } }))
+    writeRoleWave(repo, { run: 'host-context-worktree', roles: [{ key: 'developer', skill: 'host-role', model: 'k3', args: '', workspace: 'worktree:unauthorized' }] })
+    const spawnChild = vi.fn()
+    await expect(runner.runSkillCli(['--role-wave-file', '.specrails/kimi-role-wave.json'], {
+      scriptPath: path.join(providerRoot, 'specrails', 'run-skill.mjs'), cwd: repo,
+      env: { SPECRAILS_EXECUTION_CONTEXT: contextPath }, spawnChild,
+    })).rejects.toThrow('Host-owned execution')
+    expect(spawnChild).not.toHaveBeenCalled()
+    expect(existsSync(path.join(repo, '.specrails', 'kimi-role-worktrees', 'host-context-worktree.json'))).toBe(false)
   })
 
   it('creates, snapshots, records, and reuses isolated role worktrees', async () => {
