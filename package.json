@@ -67,7 +67,7 @@
     "ci": "npm run typecheck && npm run test:scripts && npm run test:coverage && npm run check:package"
   },
   "dependencies": {
-    "@inquirer/prompts": "^7.0.0",
+    "@inquirer/prompts": "^8.7.1",
     "ajv": "^8.18.0",
     "js-yaml": "^4.1.0",
     "picocolors": "^1.1.1"
