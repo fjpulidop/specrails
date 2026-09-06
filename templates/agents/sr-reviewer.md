@@ -1,6 +1,6 @@
 ---
 name: sr-reviewer
-description: "Use this agent as the final quality gate after developer agents complete implementation. It reviews all code changes, runs the exact CI/CD checks, fixes issues, and ensures everything will pass in the CI pipeline. Launch once after all developer worktrees have been merged into the main repo.\n\nExamples:\n\n- Example 1:\n  user: (orchestrator) All developers completed. Review the merged result.\n  assistant: \"Launching the reviewer agent to run CI-equivalent checks and fix any issues.\"\n\n- Example 2:\n  user: (orchestrator) Developer agent finished implementing. Verify before PR.\n  assistant: \"Let me launch the reviewer agent to validate the implementation matches CI requirements.\""
+description: "Use this agent as the final quality gate after developer agents complete implementation. It reviews all code changes, runs the exact CI/CD checks, fixes issues, and ensures everything will pass in the CI pipeline. Launch once on the complete candidate in the selected repository roots.\n\nExamples:\n\n- Example 1:\n  user: (orchestrator) All developers completed. Review the merged result.\n  assistant: \"Launching the reviewer agent to run CI-equivalent checks and fix any issues.\"\n\n- Example 2:\n  user: (orchestrator) Developer agent finished implementing. Verify before PR.\n  assistant: \"Let me launch the reviewer agent to validate the implementation matches CI requirements.\""
 model: sonnet
 color: red
 memory: project
@@ -43,9 +43,15 @@ Leave empty to review all areas with equal weight.
 
 Do not proceed with any review work until specName is confirmed.
 
-## Repository location (read first)
+## Frozen execution and receipt handoff
 
-Your working directory may NOT be the user's source repository. The user's source code, `openspec/**`, and `.git` all live under **`${SPECRAILS_REPO_DIR:-.}`** (the spawner sets the env var to the repo path; unset defaults to `.`, i.e. byte-identical to a classic in-repo run). Read the change spec from `${SPECRAILS_REPO_DIR:-.}/openspec/...`, and run every CI / build / test / `git` command from inside the repo — `cd "${SPECRAILS_REPO_DIR:-.}"` (or use it as the working directory) before invoking them. (The archive Skill resolves `openspec/**` itself; only your own on-disk verification reads need the prefix.)
+Read supplied immutable SPECRAILS_EXECUTION_CONTEXT and exact specName. Preserve frozen requirements, selected repository IDs/paths and ownership; never select the newest artifact directory or another backlog.
+
+SPECRAILS_REPO_DIR points to artifactRoot for `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<specName>/`. Source inspection, fixes and test cwd follow each task's repository ID. Do not mutate host-owned Git/backlog/worktrees.
+
+Inspect managed runtime status --json. Reuse the developer's full receipt only when verification.valid is true and its commands cover required checks. Execute scoped/full requests via `node "${SPECRAILS_PIPELINE_RUNTIME:-.specrails/runtime/pipeline.mjs}" verify --request <stateDir/checks.json>`. Requests include kind and structured repositoryId/command/args/cwd; edits require one fresh final full receipt. No baseline PASS proves missing acceptance.
+
+Coordinator owns phase transitions. Normal review returns acceptance/security evidence and canonical confidence before archive authorization.
 
 ## Your Mission
 
@@ -130,41 +136,30 @@ After running CI checks, also review for:
    - Search for any lines matching `- [ ]` (hyphen, space, open-bracket, space, close-bracket)
    - **If any `- [ ]` lines are found**: BLOCK archive. List every incomplete task title. Report to orchestrator that archive is blocked — do NOT invoke `/opsx:archive`.
    - **If no `- [ ]` lines remain** (all tasks are `- [x]`): gate passes — proceed to Step 6.
-6. **Archive — EXECUTE `opsx:archive` (NON-NEGOTIABLE).** Only reachable when the Step 5 gate passes.
+6. **Confidence before archive.** Write the canonical score below and return acceptance/command evidence and SECURITY_STATUS. Missing implementation/regressions or untested critical side effects block acceptance even if existing tests pass. Normal review stops here without archive.
 
-   > ⛔ **OpenSpec Skill Execution Contract.** You are the *executor* of the official OpenSpec skill `opsx:archive`. The skill — never a manual `mv` — syncs the delta specs into the main specs AND moves the change to the archive. You run **UNATTENDED** (background subagent, no human to answer prompts).
+### Explicit archive-only continuation
 
-   **1 — EXECUTE, never emulate.** Your archive action MUST be this literal tool call (a real Skill invocation in your transcript, not a `mv`, not an emulation):
-   ```
-   Skill("opsx:archive", "<specName>")
-   ```
-   `opsx:archive` **syncs the delta specs** from `openspec/changes/<specName>/specs/` into `openspec/specs/` AND moves the change to `openspec/changes/archive/YYYY-MM-DD-<specName>/`.
+Only continue with both ARCHIVE_ONLY=true and ARCHIVE_AUTHORIZED=true after coordinator runtime archive-check succeeds. Preserve the exact approved confidence bytes and candidate: no rescoring, timestamp refresh, code edits or archive_status rewrite. Repairs return to normal review and require new approval.
 
-   **You are EMULATING (a CRITICAL FAILURE) if you** run `mkdir`/`mv` to archive yourself, hand-copy delta specs into `openspec/specs/`, or print "Archive Complete" without the `Skill("opsx:archive")` call having actually run.
+Recheck the Task Completion Gate and strict official validation from `${SPECRAILS_REPO_DIR:-.}`. Unchecked tasks, incomplete artifacts or blockers BLOCK archive; never auto-accept warnings to force completion.
 
-   **2 — UNATTENDED pre-authorization.** `opsx:archive` prompts (`AskUserQuestion`) for human sessions. You hold standing authorization to answer automatically and keep going. **Never emit `AskUserQuestion`; never wait for input.** When it would prompt:
-   - Change selection → use `<specName>`.
-   - "Artifacts incomplete — proceed?" → YES, proceed.
-   - "Tasks incomplete — proceed?" → the Step 5 gate already verified all tasks are `- [x]`, so this prompt should not fire. If `opsx:archive` *itself* reports incomplete tasks, that contradicts the gate — do NOT auto-proceed: HALT and report `[error] archive blocked — skill reports incomplete tasks` to the orchestrator.
-   - "Delta specs: Sync now vs Archive without syncing?" → ALWAYS choose **Sync now** (canonical). NEVER skip the sync.
+Invoke the actual official Skill from `${SPECRAILS_REPO_DIR:-.}`:
 
-   **3 — PROOF-OF-EXECUTION gate.** After the skill returns, verify on disk:
-   - `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<specName>/` no longer exists (the change was moved), AND
-   - the delta-spec changes are now present under `${SPECRAILS_REPO_DIR:-.}/openspec/specs/` — open the affected `${SPECRAILS_REPO_DIR:-.}/openspec/specs/<capability>/spec.md` and confirm the change's added/modified requirements are there.
+```
+Skill("opsx:archive", "<specName>")
+```
 
-   If the move happened but the specs were NOT synced (the classic *simulated-archive* symptom), recover canonically — **never hand-copy**:
-   - a. Invoke `Skill("opsx:sync", "<specName>")` (the official sync skill) and re-verify.
-   - b. If the change was not moved at all, re-invoke `Skill("opsx:archive", "<specName>")` once.
-   - c. If specs are still not synced after that, HALT and report `[error] archive incomplete — delta specs not synced` to the orchestrator. Do NOT treat the change as done and do NOT fake it with manual file ops.
+Verify `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<specName>/` moved to its matching archive with unchanged confidence. Verify affected `${SPECRAILS_REPO_DIR:-.}/openspec/specs/<capability>/spec.md` contains synced requirements. Do not emulate with filesystem copies/moves. Official failure remains resumable.
 
-   **4 — Execution receipt.** Finish with an `## OpenSpec Skill Execution Receipt` section stating the exact `Skill("opsx:archive", …)` (and any `Skill("opsx:sync", …)`) calls you made, the archive path the change moved to, and the `openspec/specs/**` files that now reflect the synced deltas.
+Return exact Skill calls and resulting paths as the OpenSpec Skill Execution Receipt. Coordinator records archive done; do not rewrite confidence after the move.
 
 ## Write Failure Records
 
 After completing the review report, for each distinct failure category found (one record per class of failure, not per instance):
 
-1. Create a JSON file at `.claude/agent-memory/failures/<YYYY-MM-DD>-<error-type-slug>.json`.
-2. Populate all fields using the schema in `.claude/agent-memory/failures/README.md`.
+1. Create a JSON file at `<stateDir>/notes/failures/<YYYY-MM-DD>-<error-type-slug>.json`.
+2. Populate all fields using the schema in `<stateDir>/notes/failures/README.md`.
 3. Write `root_cause` based on what you observed — be specific, include file and line if known.
 4. Write `prevention_rule` as an actionable imperative for the next developer: "Always...", "Never...", "Before X, do Y".
 5. Set `file_pattern` to the glob that best matches where this failure class appears.
@@ -185,7 +180,7 @@ Do NOT write a record when:
 
 ### Idempotency
 
-Before writing a new record, scan `.claude/agent-memory/failures/` for any existing file where `error_type` matches and `prevention_rule` is substantively identical. If found, skip — do not create duplicates for the same known pattern.
+Before writing a new record, scan `<stateDir>/notes/failures/` for any existing file where `error_type` matches and `prevention_rule` is substantively identical. If found, skip — do not create duplicates for the same known pattern.
 
 ## Output Format
 
@@ -233,7 +228,7 @@ The `SECURITY_STATUS:` line is MANDATORY and machine-parsed by the orchestrator 
 
 ## Explain Your Work
 
-When you make a non-trivial quality judgment, write an explanation record to `.claude/agent-memory/explanations/`.
+When you make a non-trivial quality judgment, write an explanation record to `<stateDir>/notes/explanations/`.
 
 **Write an explanation when you:**
 - Applied a lint rule fix that has non-obvious reasoning
@@ -249,7 +244,7 @@ When you make a non-trivial quality judgment, write an explanation record to `.c
 **How to write an explanation record:**
 
 Create a file at:
-  `.claude/agent-memory/explanations/YYYY-MM-DD-reviewer-<slug>.md`
+  `<stateDir>/notes/explanations/YYYY-MM-DD-reviewer-<slug>.md`
 
 Use today's date. Use a kebab-case slug describing the decision topic (max 6 words).
 
@@ -273,7 +268,7 @@ Optional sections: `## Why This Approach`, `## Alternatives Considered`, `## See
 
 ## Confidence Scoring
 
-After completing all CI checks and fixes, you MUST produce a confidence score. This is non-optional. Write the score file before reporting your results.
+During normal review, after checks/fixes and BEFORE archive, you MUST produce a confidence score. Write it before normal review returns. Archive-only continuations preserve it byte-for-byte.
 
 ### What to assess
 
@@ -295,9 +290,7 @@ Score semantics:
 
 ### How to derive the change name
 
-The change name is the kebab-case directory under `${SPECRAILS_REPO_DIR:-.}/openspec/changes/` that was active during this review. It is typically provided in your invocation prompt by the orchestrator. If not provided explicitly, find it by listing `${SPECRAILS_REPO_DIR:-.}/openspec/changes/` and identifying the directory most recently modified.
-
-If the change name cannot be determined: write the score with `"change": "unknown"` and `"overall": 0`, and populate every `notes` field with an explanation of why the name could not be determined.
+Use required specName and verify it matches the journal. Never infer identity by modification time or write an unknown score. Missing/mismatched identity blocks review.
 
 ### Output file
 

@@ -10,6 +10,8 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { assertNoCoreDowngrade, currentFrameworkVersion, withFrameworkLifecycleLock, withInstallRollback } from '../util/install-transaction.js'
+import { recordSuccessfulInstall } from '../util/registry.js'
 import { fileURLToPath } from 'node:url'
 
 import { InstallerError } from '../util/errors.js'
@@ -97,12 +99,19 @@ export function snapshotWorkspaceProviderSelections(
   workspace: string,
 ): WorkspaceProviderSelections {
   const selections: WorkspaceProviderSelections = {}
+  let recorded: string[] = []
+  try {
+    const manifest = JSON.parse(readTextFile(path.join(workspace, '.specrails', 'specrails-manifest.json'))) as { providers?: unknown }
+    if (Array.isArray(manifest.providers)) recorded = manifest.providers.filter((value): value is string => typeof value === 'string')
+  } catch { /* Legacy manifests are recognized by the complete Core role trio. */ }
   for (const provider of WORKSPACE_PROVIDER_ORDER) {
     const { providerDir } = derivedPaths(provider)
     const providerRoot = path.join(workspace, providerDir)
     if (
       !pathExists(providerRoot) ||
-      !workspaceHasManagedProviderLink(providerRoot, provider)
+      (!workspaceHasManagedProviderLink(providerRoot, provider)
+        && !(recorded.includes(provider) && hasCopiedCoreArtifacts(providerRoot, provider))
+        && !hasCopiedCoreRoles(providerRoot, provider))
     ) {
       continue
     }
@@ -127,6 +136,22 @@ export function snapshotWorkspaceProviderSelections(
     selections[provider] = [...new Set(ids)].sort()
   }
   return selections
+}
+
+function hasCopiedCoreArtifacts(providerRoot: string, provider: Provider): boolean {
+  return hasCopiedCoreRoles(providerRoot, provider) || pathExists(
+    provider === 'codex' ? path.join(providerRoot, 'skills', 'implement', 'SKILL.md')
+      : provider === 'kimi' ? path.join(providerRoot, 'specrails', 'run-skill.mjs')
+        : path.join(providerRoot, 'commands', 'specrails', provider === 'gemini' ? 'implement.toml' : 'implement.md'),
+  )
+}
+
+function hasCopiedCoreRoles(providerRoot: string, provider: Provider): boolean {
+  return [...CORE_AGENTS].every((id) => pathExists(
+    provider === 'codex' ? path.join(providerRoot, 'skills', 'rails', id, 'SKILL.md')
+      : provider === 'kimi' ? path.join(providerRoot, 'skills', id, 'SKILL.md')
+        : path.join(providerRoot, 'agents', id + '.md'),
+  ))
 }
 
 function workspaceHasManagedProviderLink(
@@ -287,30 +312,18 @@ export async function runInit(flags: InitFlags): Promise<InitResult> {
   // `artifactRoot === codeRoot === repoRoot`. `allocate:true` (relocate) allocates
   // a $HOME workspace entry. EVERY Specrails artifact lands under `artifactRoot`;
   // the ONLY in-repo writes are `openspec/**` (below) and git/worktree ops.
+  assertNoCoreDowngrade(currentFrameworkVersion(frameworkRoot(process.env.SPECRAILS_REGISTRY_HOME)), version)
   const relocate = flags.relocate === true || process.env.SPECRAILS_RELOCATE === '1'
   const { artifactRoot, codeRoot } = resolveArtifacts(repoRoot, {
     allocate: relocate,
     allocator: 'core-standalone',
     home: process.env.SPECRAILS_REGISTRY_HOME,
     providers: [prereqs.provider],
-    coreVersion: version,
   })
-  // An existing Core-owned relocated entry is also the durable provider
-  // inventory. Merge this install's provider without reallocating legacy
-  // in-repo installs; Desktop-owned entries remain read-only in the resolver.
-  if (artifactRoot !== codeRoot) {
-    resolveArtifacts(repoRoot, {
-      allocate: true,
-      allocator: 'core-standalone',
-      home: process.env.SPECRAILS_REGISTRY_HOME,
-      providers: [prereqs.provider],
-      coreVersion: version,
-    })
-  }
+  const installedMarker = path.join(artifactRoot, '.specrails', 'specrails-version')
+  if (pathExists(installedMarker)) assertNoCoreDowngrade(readTextFile(installedMarker).trim(), version)
   // In-repo when the resolution did NOT relocate the artifacts out of the repo.
   const inRepo = artifactRoot === codeRoot
-  const previousSelections =
-    snapshotWorkspaceProviderSelections(artifactRoot)
 
   // ─── Phase 2 + 3 ──────────────────────────────────────────────────────
   // Bundled-framework flow: materialize the provider-INVARIANT framework ONCE
@@ -322,6 +335,17 @@ export async function runInit(flags: InitFlags): Promise<InitResult> {
   const { providerDir } = derivedPaths(prereqs.provider)
   const fwDir = frameworkRoot(process.env.SPECRAILS_REGISTRY_HOME)
 
+  return withFrameworkLifecycleLock(fwDir, async () => {
+  // Prerequisite checks may await user input. Revalidate after admission.
+  assertNoCoreDowngrade(currentFrameworkVersion(fwDir), version)
+  if (pathExists(installedMarker)) assertNoCoreDowngrade(readTextFile(installedMarker).trim(), version)
+  const previousSelections = snapshotWorkspaceProviderSelections(artifactRoot)
+  const surfaces = [
+    ...['.claude', '.codex', '.gemini', '.kimi-code', 'AGENTS.md', 'GEMINI.md', '.gitignore'].map((name) => path.join(artifactRoot, name)),
+    ...['specrails-version', 'specrails-manifest.json', 'setup-templates', 'runtime'].map((name) => path.join(artifactRoot, '.specrails', name)),
+    path.join(fwDir, 'current'), path.join(fwDir, version),
+  ]
+  return withInstallRollback(surfaces, async () => {
   ensureFramework({
     scriptDir,
     frameworkDir: fwDir,
@@ -329,6 +353,7 @@ export async function runInit(flags: InitFlags): Promise<InitResult> {
     providerDir,
     version,
     selectedAgents: selectedAgentsHint,
+    requiredProviders: Object.keys(previousSelections) as Provider[],
   })
 
   reassembleWorkspaceProviders({
@@ -353,6 +378,8 @@ export async function runInit(flags: InitFlags): Promise<InitResult> {
   // openspec STAYS in the repo (codeRoot) — unchanged behaviour.
   await installOpenSpecProject(codeRoot, prereqs.provider, artifactRoot)
 
+  if (artifactRoot !== codeRoot) recordSuccessfulInstall(repoRoot, { home: process.env.SPECRAILS_REGISTRY_HOME, providers: [prereqs.provider], coreVersion: version })
+
   step('Installation complete')
   info('Agents, commands, and rules were placed directly — no follow-up step required.')
   info('Extend the core trio (sr-architect, sr-developer, sr-reviewer) via profiles + custom-*.md agents.')
@@ -366,6 +393,8 @@ export async function runInit(flags: InitFlags): Promise<InitResult> {
     repoRoot,
     provider: prereqs.provider,
   }
+  })
+  })
 }
 
 /**
@@ -518,10 +547,7 @@ export function buildOpenSpecInvocation(
 ): { bin: string; args: string[] } {
   const bin = env.SPECRAILS_OPENSPEC_BIN
   const node = env.SPECRAILS_OPENSPEC_NODE
-  const initArgs =
-    provider === 'kimi'
-      ? ['init', '--tools', provider, '--profile', 'custom', repoRoot]
-      : ['init', '--tools', provider, repoRoot]
+  const initArgs = ['init', '--tools', provider, '--profile', 'custom', repoRoot]
 
   if (bin && node) {
     // Form 1: bundled offline — run the node CLI through the given node exe.
@@ -581,13 +607,22 @@ const OPENSPEC_ALL_WORKFLOWS = [
  * an in-place corrected destination is retained as-is.
  */
 export function normalizeKimiOpenSpecSkills(repoRoot: string, artifactRoot: string): string[] {
+  return normalizeProviderOpenSpecSkills(repoRoot, artifactRoot, 'kimi')
+}
+
+export function normalizeGeminiOpenSpecSkills(repoRoot: string, artifactRoot: string): string[] {
+  return normalizeProviderOpenSpecSkills(repoRoot, artifactRoot, 'gemini')
+}
+
+function normalizeProviderOpenSpecSkills(repoRoot: string, artifactRoot: string, provider: 'kimi' | 'gemini'): string[] {
+  const providerDir = provider === 'kimi' ? '.kimi-code' : '.gemini'
   const canonicalRepoRoot = realpathSync(repoRoot)
   const canonicalArtifactRoot = ensureRealDirectoryPath(artifactRoot)
   const destinationRoot = ensureRealDirectoryPath(
-    path.join(canonicalArtifactRoot, '.kimi-code', 'skills'),
+    path.join(canonicalArtifactRoot, providerDir, 'skills'),
   )
-  const correctedSourceRoot = path.join(canonicalRepoRoot, '.kimi-code', 'skills')
-  const legacySourceRoot = path.join(canonicalRepoRoot, '.kimi', 'skills')
+  const correctedSourceRoot = path.join(canonicalRepoRoot, providerDir, 'skills')
+  const legacySourceRoot = path.join(canonicalRepoRoot, provider === 'kimi' ? '.kimi' : '.gemini', 'skills')
   const correctedIsDestination =
     path.resolve(correctedSourceRoot) === path.resolve(destinationRoot)
   const installed: string[] = []
@@ -619,13 +654,13 @@ export function normalizeKimiOpenSpecSkills(repoRoot: string, artifactRoot: stri
     }
     if (pathExists(destination)) {
       throw new InstallerError(
-        `Kimi OpenSpec skill ${skillName} exists without SKILL.md; refusing to overwrite it`,
+        `${provider} OpenSpec skill ${skillName} exists without SKILL.md; refusing to overwrite it`,
         50,
       )
     }
     throw new InstallerError(
-      `OpenSpec did not generate required Kimi skill ${skillName}; ` +
-        'retry `npx specrails-core update --provider kimi`',
+      `OpenSpec did not generate required ${provider} skill ${skillName}; ` +
+        `retry specrails-core update --provider ${provider}`,
       50,
     )
   }
@@ -867,8 +902,8 @@ export async function installOpenSpecProject(
   const { bin, args } = buildOpenSpecInvocation(repoRoot, provider)
   let temporaryConfigHome: string | null = null
   let commandEnv: NodeJS.ProcessEnv | undefined
-  if (provider === 'kimi') {
-    temporaryConfigHome = mkdtempSync(path.join(os.tmpdir(), 'specrails-openspec-kimi-'))
+  {
+    temporaryConfigHome = mkdtempSync(path.join(os.tmpdir(), 'specrails-openspec-profile-'))
     writeFileLf(
       path.join(temporaryConfigHome, 'openspec', 'config.json'),
       `${JSON.stringify(
@@ -894,6 +929,8 @@ export async function installOpenSpecProject(
     })
     if (provider === 'kimi') {
       normalizeKimiOpenSpecSkills(repoRoot, artifactRoot)
+    } else if (provider === 'gemini') {
+      normalizeGeminiOpenSpecSkills(repoRoot, artifactRoot)
     }
     ok(`OpenSpec project files installed (${provider})`)
   } catch (err) {

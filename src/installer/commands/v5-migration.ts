@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { lstatSync } from 'node:fs'
 
 import { info, ok } from '../util/logger.js'
 import { pathExists, removePath } from '../util/fs.js'
@@ -64,6 +65,12 @@ export function migratePreV5Install(input: V5MigrationInput): void {
 
   const remove = (abs: string): void => {
     if (!pathExists(abs)) return
+    // Parent symlinks/junctions belong to an immutable shared framework. The
+    // new assembly replaces the workspace link; never delete its old target.
+    for (let parent = path.dirname(abs); parent !== artifactRoot; parent = path.dirname(parent)) {
+      if (parent === path.dirname(parent)) return
+      try { if (lstatSync(parent).isSymbolicLink()) return } catch { return }
+    }
     const rel = repoRelative(artifactRoot, abs)
     if (isReservedPath(rel)) return
     removePath(abs)

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -83,6 +83,16 @@ describe('migratePreV5Install', () => {
     expect(isFile(path.join(tmpDir, '.claude', 'agents', 'custom-auditor.md'))).toBe(true)
     expect(isFile(path.join(tmpDir, '.specrails', 'profiles', 'project-default.json'))).toBe(true)
     expect(isFile(path.join(tmpDir, '.claude', 'agents', 'personal-notes.md'))).toBe(true)
+  })
+
+  it('does not follow a workspace directory link to delete the previous shared framework', () => {
+    const previous = path.join(tmpDir, 'framework', '4.12.0', '.claude', 'commands')
+    writeFileLf(path.join(previous, 'specrails', 'enrich.md'), 'old usable enrich')
+    const workspace = path.join(tmpDir, 'workspace')
+    mkdirSync(path.join(workspace, '.claude'), { recursive: true })
+    symlinkSync(previous, path.join(workspace, '.claude', 'commands'), process.platform === 'win32' ? 'junction' : 'dir')
+    migratePreV5Install({ artifactRoot: workspace, providerDir: '.claude' })
+    expect(readFileSync(path.join(previous, 'specrails', 'enrich.md'), 'utf8')).toBe('old usable enrich')
   })
 
   it('is a no-op on a clean v5 install (nothing removed)', () => {

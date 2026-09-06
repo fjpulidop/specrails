@@ -1,122 +1,42 @@
 ---
 name: retry
-description: "Resume a previously-attempted $implement pipeline for a ticket. Detects what's already on disk (OpenSpec change package, partial code, ticked tasks.md) and re-invokes $implement so the architect/developer/reviewer agents skip work that's already correct and pick up where the prior run left off. Use when the user invokes `$retry #N` after a $implement run that ended in `todo` or `blocked`."
+description: "Resume the first invalid implement phase using the durable pipeline journal and explicit role handoffs."
 license: MIT
-compatibility: "Codex-native. Thin wrapper around $implement — relies on the implement pipeline's existing idempotence rather than tracking its own state."
+compatibility: "Codex-native root-level role delegation; no nested implement or assumed provider conversation memory."
 ---
 
-You are the **retry orchestrator**. The user wants to continue a
-prior `$implement` run for a single ticket without redoing work
-that's already correct on disk.
+You are the retry orchestrator. Accept `$retry #N`, `$retry <change>`, and `--yes`.
+Resolve `${SPECRAILS_REPO_DIR:-.}` only as the legacy source default; the installed
+pipeline helper and SPECRAILS_EXECUTION_CONTEXT provide the authoritative roots.
+Call `status` for the existing run/change. Report its completed phases and
+`resumePhase`. Do not search other projects or guess a change from a matching title.
+When there is no journal, report the missing run/context and require explicit new
+admission; do not silently initialize a replacement retry scope. Never erase existing
+code or use a checked task alone as proof of implementation.
 
-You are NOT a separate pipeline. You inspect what `$implement`
-left behind, summarise the current state, and re-invoke
-`$implement` with a hint about what's already in place. The
-implement skill is idempotent — architect reuses an existing
-`${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/`, developer detects ticked tasks and
-already-correct files, reviewer re-validates from scratch.
+Read `.codex/skills/implement/SKILL.md` as the phase definition; execute its remaining
+roles DIRECTLY from this root agent. Do not spawn `$implement` as a sub-agent.
+Use `spawn_agent`, `send_message` and `wait_agent` only for `$sr-architect`,
+`$sr-developer`, `$sr-reviewer` or explicitly configured installed custom roles.
+Preserve the configured provider model; do not pass model/reasoning_effort on
+full-history forks. Give every role the bounded explicit handoff from the shared
+contract, including unchanged frozen acceptance criteria and exact prior findings.
 
-**Repository location.** `openspec/**` and `.git` live under
-`${SPECRAILS_REPO_DIR:-.}` (unset ⇒ `.` ⇒ classic in-repo run); inspect change
-artefacts there. The ticket store and `.specrails/agent-memory/` are run-state,
-relative to the working directory.
+- Architect resumes only if status says design is invalid/missing/blocked.
+- Developer resumes the first incomplete or stale task; do not repeat valid design.
+- Reviewer resumes semantic review with the actual candidate and verification
+  receipts. If findings require code changes, record developer running and invoke
+  developer with those exact findings, then reviewer again (at most one fix round).
+- Never assume a `MAX_TURNS` or successful process exit completed a phase. Save the
+  checkpoint and invoke the same role with the pending work; two continuations
+  without file/task/evidence progress stop as blocked with the outstanding action.
+- Archive uses `archive-check`, followed by reviewer archive-only authorization;
+  missing/low confidence or stale checks never become success through retry.
+- Ship resumes only missing authorized Core-owned delivery; CI checks existing
+  delivery without shipping again. Host-owned ship/ci record skipped; backlog and
+  worktrees remain with their owner. Backlog closure also compares live requirements
+  with frozen scope at context.backlogPath, as implement requires.
 
-## How the user invokes you
-
-- `$retry #N` — retry the implement run for ticket `N`.
-- `$retry #N --yes` — same, non-interactive.
-
-## Steps
-
-### 0. Locate the prior run's artefacts
-
-1. Confirm the repo root with `git -C "${SPECRAILS_REPO_DIR:-.}" rev-parse --show-toplevel`.
-2. Load the ticket (run-state, relative to the working directory):
-   `jq '.tickets["<ID>"]' .specrails/local-tickets.json`. If
-   the ticket doesn't exist, stop and report.
-3. Inspect what's already on disk for this ticket:
-   - **Architect artefacts**: any matching plan file under
-     `.specrails/agent-memory/explanations/` named
-     `*-architect-ticket-<ID>.md`. List the latest.
-   - **OpenSpec change package**: any
-     `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/` whose proposal.md mentions
-     the ticket title or whose tasks.md has tasks scoped to
-     the ticket. Find the slug.
-   - **tasks.md progress**: count `[x]` vs `[ ]` boxes in
-     `${SPECRAILS_REPO_DIR:-.}/openspec/changes/<slug>/tasks.md`.
-   - **Reviewer verdict**: latest matching
-     `*-reviewer-ticket-<ID>.confidence-score.json`. Read
-     the issues list and overall score.
-
-### 1. Summarise (≤6 lines)
-
-Print a concise state summary so the user sees what you
-detected:
-
-```
-Prior run for #<ID>:
-  Plan:        <path or "missing">
-  Change pkg:  openspec/changes/<slug>/ (<found / missing>)
-  Tasks:       <X>/<N> ticked
-  Last review: <score>/100 — <verdict>
-  Open issues: <count> (top: "<first issue note, truncated>")
-```
-
-If no prior artefacts exist, say so explicitly — `$retry` on a
-ticket that was never attempted is just `$implement`, and you
-fall through to step 2 anyway.
-
-### 2. Re-invoke $implement
-
-`spawn_agent` (full-history fork, no agent_type / model /
-reasoning_effort). `send_message`:
-
-> `$implement`
->
-> Ticket id: `<TICKET_ID>`
-> Mode: **retry**
->
-> A prior run left:
->   - plan at `<plan-path-or-none>`
->   - change package at `openspec/changes/<slug>/` (<found|missing>)
->   - tasks.md progress: <X>/<N> ticked
->   - last reviewer score: <N>/100 with <K> open issues
->
-> Open issues from the last review (verbatim):
-> - <issue 1 from confidence-score.json>
-> - <issue 2>
-> - ...
->
-> Honour these on this retry:
-> 1. If the change package exists and proposal.md is sane,
->    REUSE it. The architect should refine design.md / tasks.md
->    if the issues call for it, not start from scratch.
-> 2. The developer should pick up at the first un-ticked task
->    box. Already-ticked boxes whose files match the intended
->    state should NOT be redone.
-> 3. The reviewer re-runs from scratch — no caching of prior
->    verdict.
->
-> Follow the $implement skill instructions exactly. Reply
-> with the standard implement summary.
-
-`wait_agent`. `close_agent`. Print the sub-agent's reply
-verbatim as your own final report.
-
-## What you must NOT do
-
-- **Do NOT re-implement the pipeline**. You only inspect +
-  delegate. The implement skill owns the actual work.
-- **Do NOT modify any file directly** — neither the OpenSpec
-  package nor the ticket. The spawned `$implement` does that.
-- **Do NOT skip the "open issues" passthrough**. If the last
-  review listed fixes, the next pipeline needs to see them
-  verbatim — that's what makes retry produce a different
-  result than a fresh `$implement`.
-- **Do NOT loop on retry**. If the user wants a second retry,
-  they invoke `$retry #N` again themselves. One retry per
-  invocation.
-- **Do NOT pass `agent_type`, `model`, or `reasoning_effort`**
-  to `spawn_agent` on full-history forks.
-- **Do NOT touch `.claude/agent-memory/`** — codex projects
-  use `.specrails/agent-memory/`.
+Record each outcome with the helper. A blocked phase is resumable, never an
+intentionally skipped phase. Report the run, change, resumed roles, verification,
+archive outcome and any remaining blocker. No recursive retry loops.

@@ -1,9 +1,10 @@
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as filesystem from '../util/fs.js'
 import { isDir, isSymlink, pathExists, readTextFile, removePath, writeFileLf } from '../util/fs.js'
 import {
   assembleProjectWorkspace,
@@ -63,6 +64,7 @@ describe('bundled framework — installFramework / ensureCurrentSymlink / assemb
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     if (originalHome === undefined) delete process.env.HOME
     else process.env.HOME = originalHome
     if (originalUserProfile === undefined) delete process.env.USERPROFILE
@@ -71,6 +73,24 @@ describe('bundled framework — installFramework / ensureCurrentSymlink / assemb
   })
 
   describe('installFramework', () => {
+    it('refreshes a framework under Unicode paths without losing sibling provider bytes', () => {
+      const scriptDir = path.join(tmpDir, 'Paquete español')
+      const fwDir = path.join(tmpDir, 'José User Home', 'framework')
+      setupFakeScriptDir(scriptDir)
+      const input = {
+        scriptDir, frameworkDir: fwDir, provider: 'claude' as const,
+        providerDir: '.claude', version: '5.0.0',
+      }
+      installFramework(input)
+      const sibling = path.join(fwDir, '5.0.0', '.codex', 'skills', 'Guía', '契約.md')
+      writeFileLf(sibling, 'unchanged sibling provider instructions')
+      writeFileLf(path.join(scriptDir, 'templates', 'agents', 'sr-architect.md'), '# updated architecture')
+      expect(installFramework(input).materialized).toBe(true)
+      expect(readTextFile(path.join(fwDir, '5.0.0', '.claude', 'agents', 'sr-architect.md')))
+        .toBe('# updated architecture')
+      expect(readTextFile(sibling)).toBe('unchanged sibling provider instructions')
+    })
+
     it('materializes the provider-static subtree once under <frameworkDir>/<version>/<providerDir>', () => {
       const scriptDir = path.join(tmpDir, 'core')
       const fwDir = path.join(tmpDir, 'framework')
@@ -131,6 +151,44 @@ describe('bundled framework — installFramework / ensureCurrentSymlink / assemb
       expect(repaired.materialized).toBe(true)
       expect(readTextFile(archPath)).toContain('# arch')
       expect(readTextFile(stampPath)).toBe(firstStamp)
+    })
+
+    it('keeps the live framework and prior stamp when same-version generation fails', () => {
+      const scriptDir = path.join(tmpDir, 'core-failure')
+      const fwDir = path.join(tmpDir, 'framework-failure')
+      setupFakeScriptDir(scriptDir)
+      const input = { scriptDir, frameworkDir: fwDir, provider: 'claude' as const, providerDir: '.claude', version: '5.0.0' }
+      installFramework(input)
+      ensureCurrentSymlink(fwDir, '5.0.0')
+      const live = path.join(fwDir, 'current', '.claude', 'agents', 'sr-architect.md')
+      const original = readTextFile(live)
+      const stamp = readTextFile(frameworkStampPath(path.join(fwDir, '5.0.0'), '.claude'))
+      writeFileLf(path.join(scriptDir, 'templates', 'agents', 'sr-architect.md'), '# replacement')
+      const write = filesystem.writeFileLf
+      vi.spyOn(filesystem, 'writeFileLf').mockImplementation((file, contents) => {
+        if (file.includes('.materialize-') && file.includes('.framework-stamp')) throw new Error('fixture disk write failed')
+        return write(file, contents)
+      })
+      expect(() => installFramework(input)).toThrow('fixture disk write failed')
+      expect(readTextFile(live)).toBe(original)
+      expect(readTextFile(frameworkStampPath(path.join(fwDir, '5.0.0'), '.claude'))).toBe(stamp)
+      expect(readdirSync(fwDir).some(name => name.startsWith('.materialize-'))).toBe(false)
+    })
+
+    it('refreshes changed runtime bytes at the same version and retains the prior framework', () => {
+      const scriptDir = path.join(tmpDir, 'core-runtime')
+      const fwDir = path.join(tmpDir, 'framework-runtime')
+      setupFakeScriptDir(scriptDir)
+      const runtime = path.join(scriptDir, 'dist', 'installer', 'runtime', 'pipeline-state.js')
+      writeFileLf(runtime, '// first runtime')
+      const input = { scriptDir, frameworkDir: fwDir, provider: 'claude' as const, providerDir: '.claude', version: '5.0.0' }
+      installFramework(input)
+      writeFileLf(runtime, '// second runtime')
+      expect(installFramework(input).materialized).toBe(true)
+      expect(readTextFile(path.join(fwDir, '5.0.0', '.specrails', 'runtime', 'pipeline-state.mjs'))).toContain('second runtime')
+      const previous = readdirSync(fwDir).find(name => name.startsWith('.previous-5.0.0-'))!
+      expect(previous).toBeTruthy()
+      expect(readTextFile(path.join(fwDir, previous, '.specrails', 'runtime', 'pipeline-state.mjs'))).toContain('first runtime')
     })
 
     it('repairs a missing managed file at the same version', () => {

@@ -712,3 +712,22 @@ export function resolveArtifacts(repoPathInput: string, opts: ResolveOptions = {
     return entryToResolution(key, entry)
   })
 }
+
+/** Commit version metadata only after successful materialization and assembly.
+ * Desktop-owned entries remain the host's responsibility; never claim ownership.
+ */
+export function recordSuccessfulInstall(repoPath: string, opts: Pick<ResolveOptions, 'home' | 'providers' | 'coreVersion' | 'now'>): void {
+  const key = normalizeKey(canonicalizeRepoPath(repoPath))
+  const requested = validateProvidersForWrite(opts.providers, false)
+  withFileLock(opts.home, () => {
+    const registry = readRegistryOrEmpty(opts.home)
+    const entry = registry.projects[key]
+    if (!entry || entry.source !== 'core-standalone') return
+    entry.providers = [...new Set([...entry.providers, ...requested])]
+    entry.primaryProvider = entry.primaryProvider || entry.providers[0] || 'claude'
+    if (opts.coreVersion) entry.coreVersion = opts.coreVersion
+    entry.lastInstallAt = opts.now ?? new Date().toISOString()
+    registry.updatedAt = entry.lastInstallAt
+    atomicWrite(registryPath(opts.home), JSON.stringify(registry, null, 2) + '\n')
+  })
+}

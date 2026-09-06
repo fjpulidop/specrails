@@ -533,7 +533,7 @@ describe('runInit', () => {
       [
         '#!/bin/sh',
         'if [ "$1" = "init" ]; then',
-        '  repo="$4"',
+        '  for argument in "$@"; do repo="$argument"; done',
         '  mkdir -p "$repo/openspec/changes/archive" "$repo/openspec/specs"',
         '  mkdir -p "$repo/.claude/commands/opsx" "$repo/.claude/skills/openspec-propose"',
         '  : > "$repo/.claude/commands/opsx/propose.md"',

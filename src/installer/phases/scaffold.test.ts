@@ -215,7 +215,7 @@ describe('scaffold', () => {
       expect(gmd).toContain('.gemini/')
       expect(gmd).toContain('.specrails/local-tickets.json')
       // No throw, no codex/claude leakage.
-      expect(isDir(path.join(repoRoot, '.gemini', 'skills'))).toBe(false)
+      expect(isDir(path.join(repoRoot, '.gemini', 'skills'))).toBe(true)
     })
 
     it('grants activate_skill + rewrites Claude Skill("opsx:*") calls in gemini agents', () => {
@@ -1263,16 +1263,10 @@ describe('Kimi scaffold', () => {
     expect(implement).toContain(
       '--role-wave-file .specrails/kimi-role-wave.json',
     )
-    expect(implement).toContain(
-      '--role-wave-status <stable-run-id>',
-    )
-    expect(implement).toContain(
-      '--role-merge-file .specrails/kimi-role-merge.json',
-    )
-    expect(implement).toContain('--role-wave-cleanup <run>')
-    expect(implement).toContain('"kimi_role_wave": {')
-    expect(implement).toContain('Every change is `{status:"A"|"M"|"D",path}`')
-    expect(implement).toContain('Filenames may contain spaces, Unicode')
+    expect(implement).toContain('`workspace:"current"`')
+    expect(implement).toContain('same\naggregate execution context')
+    expect(implement).not.toContain('"kimi_role_wave": {')
+    expect(implement).not.toContain('Kimi role-wave merge algorithm')
     expect(implement).not.toContain('cp <worktree-path>/<file>')
     expect(implement).not.toContain('git -C <worktree-path> diff main')
     expect(implement).not.toContain('ROLE_ARGS=')
@@ -1290,12 +1284,11 @@ describe('Kimi scaffold', () => {
     const batch = readTextFile(
       path.join(workflowRoot, 'specrails-batch-implement', 'SKILL.md'),
     )
-    expect(batch).toContain('`skill:"specrails-implement"`')
-    expect(batch).toContain('`workspace:"worktree:<feature-id>"`')
-    expect(batch).toContain('effective concurrency')
-    expect(batch).toContain('`--role-wave-status`')
-    expect(batch).toContain('Do not call multiple built-in `Skill` tools')
-    expect(batch).toContain('KIMI_BACKLOG_VIEW')
+    expect(batch).toContain('Skill(skill="specrails-implement", args="<all original arguments>")')
+    expect(batch).toContain('one aggregate OpenSpec change and one journal')
+    expect(batch).toContain('Do not launch a role wave of full implementations')
+    expect(batch).not.toContain('deterministic safe run id `<BATCH_RUN>-w<W>`')
+
 
     const telemetry = readTextFile(
       path.join(workflowRoot, 'specrails-telemetry', 'SKILL.md'),
@@ -1308,9 +1301,11 @@ describe('Kimi scaffold', () => {
     const retry = readTextFile(
       path.join(workflowRoot, 'specrails-retry', 'SKILL.md'),
     )
-    expect(retry).toContain('`KIMI_ROLE_WAVE`')
-    expect(retry).toContain('--role-wave-status <run>')
-    expect(retry).toContain('never cleanup before')
+    expect(retry).toContain('Kimi direct-role continuation')
+    expect(retry).toContain('do not activate a nested specrails-implement')
+    expect(retry).toContain('Follow resumePhase and receipt reasons')
+    expect(retry).not.toContain('`KIMI_ROLE_WAVE`')
+
 
     const installedRunner = await import(
       pathToFileURL(
@@ -1402,7 +1397,7 @@ describe('Kimi scaffold', () => {
       ).toBeLessThanOrEqual(30_000)
     }
     // Proves the test exercises the historical CreateProcess regression rather
-    // than only small fixtures: implement/enrich exceed 60K materialized.
-    expect(largestMaterializedPrompt).toBeGreaterThan(60_000)
+    // than only small fixtures: real workflows exceed the 30K command budget.
+    expect(largestMaterializedPrompt).toBeGreaterThan(30_000)
   })
 })

@@ -18,3 +18,10 @@ import path from 'node:path'
 if (!process.env.SPECRAILS_REGISTRY_HOME) {
   process.env.SPECRAILS_REGISTRY_HOME = mkdtempSync(path.join(os.tmpdir(), 'specrails-test-home-'))
 }
+
+// A verification run may launch this suite from inside an active Core pipeline.
+// Test helpers must never inherit its live journal or execution roots. Per-test
+// fixtures can set their own scope after this setup file has run.
+for (const key of ['SPECRAILS_EXECUTION_CONTEXT', 'SPECRAILS_PIPELINE_RUNTIME', 'SPECRAILS_REPO_DIR']) {
+  delete process.env[key]
+}

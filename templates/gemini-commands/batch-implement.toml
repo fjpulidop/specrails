@@ -1,43 +1,31 @@
-description = "Batch Implementation Orchestrator — runs the implement pipeline over multiple tickets, headless."
+description = "Aggregate batch implementation with one durable journal and final candidate gates."
 
 prompt = '''
-You are the **batch-implement orchestrator**. The user invoked you to apply the
-implement pipeline to multiple tickets in one session. This is fully headless /
-non-interactive — every phase runs with `--yes` semantics.
+Resolve all target IDs or filters and freeze their complete descriptions,
+acceptance criteria and repository IDs. With a host context preserve context.specs
+unchanged. Resolve source/artifact/backlog roots explicitly; cwd can be external.
 
-How the user invokes you:
-- `/specrails:batch-implement #1 #2 #3 --yes` — sequential.
-- `/specrails:batch-implement --status todo` — every todo ticket, ascending id.
-- `/specrails:batch-implement #1 #2 --parallel` — opt-in parallel, only when the
-  tickets touch disjoint files (run a safety check first; fall back to sequential).
+Initialize ONE aggregate OpenSpec change and journal for this runId. Never create
+per-ticket child changes/journals with the same context. Read
+`.gemini/commands/specrails/implement.toml` and apply its capability preflight,
+explicit invoke_agent(agent_name,prompt) handoff, progress-bound continuation and
+gates to the whole batch:
 
-## Desktop rail execution context
+1. One architect designs all tickets, groups tasks by ticket/repository and
+   dependency order, validates OpenSpec and high/medium design confidence.
+2. One developer implements groups sequentially, persisting progress in tasks.md.
+   Use scoped checks per group and one full helper verification for the aggregate
+   candidate before developer done. Incomplete groups remain retriable.
+3. One reviewer checks every acceptance criterion and cross-ticket interaction;
+   pass all frozen specs, changed paths and the full receipt. Ordinary review
+   never archives. At most one exact-findings developer repair plus re-review.
+4. After clean semantic reviewer done, run archive-check; only success authorizes
+   reviewer archive-only mode. Verify the archive and record archive done. Only
+   then close ALL Core-owned tickets, or report results to the owning host.
 
-When the working directory is a specrails-desktop isolated rail worktree (path contains `/worktrees/`, typically on a `feat/...` branch), you are the ASSIGNED executor of that rail: implement every ticket sequentially in THIS worktree on THIS branch — the desktop assembles it into a batch PR afterwards, nothing needs to land on the integration branch first. The desktop's own bookkeeping (ticket-ownership rows in its `jobs.sqlite`, state under `~/.specrails/`) describes this very launch — never read those internals, and never stop to ask which process should run the batch.
-
-## Why this drives the spawns at the ROOT level
-
-Do NOT delegate to a nested `/specrails:implement` subagent per ticket that then
-delegates to architect/developer/reviewer. Subagents are FLAT — a subagent
-cannot invoke another subagent (and nested depth-2 delegation is unreliable,
-silently dropping the reviewer phase). Instead, YOU (the root orchestrator) drive
-the three `invoke_agent` calls — `sr-architect`, `sr-developer`, `sr-reviewer` —
-directly, at depth 1, per ticket. Three real subagent calls per ticket, no
-nesting. The same delegation contract as `/specrails:implement` applies: every
-phase MUST be a real `invoke_agent` call; never inline the work.
-
-## Steps
-
-0. **Bootstrap.** Confirm `pwd` is the git repo root. Resolve the ticket list
-   (explicit ids, or `--status`/`--priority` filters over `.specrails/local-tickets.json`).
-
-1. **Per ticket, in order, run the three-phase pipeline at depth 1:**
-   a. `invoke_agent` `sr-architect` → creates + validates the OpenSpec change.
-      If `BLOCKED`, record the failure and move to the next ticket.
-   b. `invoke_agent` `sr-developer` → applies the change (implements + checks off tasks).
-   c. `invoke_agent` `sr-reviewer` → validates; on pass, `openspec archive <id> -y`.
-   d. Update the ticket to `done` (or record the failure verdict).
-
-2. **Aggregate.** After all tickets, report a single table: ticket, change id,
-   verdict (done / blocked / failed), with a one-line reason for non-done ones.
+Run these roles directly at root, no nested implement coordinator. Retry resumes
+this aggregate journal without repeating valid phases. A --parallel preference
+never overrides host ownership, unknown capacity or overlapping mutation paths;
+use sequential execution and report it honestly. Final output lists each ticket,
+aggregate verification/archive status and unresolved task groups; no partial done.
 '''

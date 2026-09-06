@@ -6,9 +6,9 @@ import { info, ok, step, warn } from '../util/logger.js'
 import { copyDir, isDir, pathExists, readTextFile } from '../util/fs.js'
 
 import { loadInstallConfig, resolveConfigPath } from '../phases/install-config.js'
-import { buildManifest, writeManifestFiles, type SpecrailsManifest } from '../phases/manifest.js'
 import { derivedPaths, detectAvailability, resolveProvider, type Provider } from '../phases/provider-detect.js'
-import { frameworkRoot, resolveArtifacts } from '../util/registry.js'
+import { frameworkRoot, resolveArtifacts, recordSuccessfulInstall } from '../util/registry.js'
+import { assertNoCoreDowngrade, currentFrameworkVersion, withFrameworkLifecycleLock, withInstallRollback } from '../util/install-transaction.js'
 import { migratePreV5Install } from './v5-migration.js'
 
 import {
@@ -81,6 +81,8 @@ export interface UpdateResult {
   dryRun: boolean
   /** Resolved scope of the update — what was actually re-applied. */
   scope: OnlyComponent
+  /** Framework version actually installed; partial updates retain the old version. */
+  installedVersion?: string | null
 }
 
 export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
@@ -99,9 +101,8 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
   // workspace (desktop's registry entry already exists, so even `allocate:false`
   // returns it). All Specrails artifacts (the specrails-version marker, manifest,
   // install-config) live under `artifactRoot`.
-  const relocate = flags.relocate === true || process.env.SPECRAILS_RELOCATE === '1'
   const { artifactRoot, codeRoot } = resolveArtifacts(repoRoot, {
-    allocate: relocate,
+    allocate: false,
     allocator: 'core-standalone',
     home: process.env.SPECRAILS_REGISTRY_HOME,
     coreVersion: currentVersion,
@@ -121,9 +122,9 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
       `No existing specrails install detected at ${repoRoot}. Run \`npx specrails-core init\` first.`,
     )
   }
-  const previousVersion = readExistingVersion(artifactRoot)
-  const previousSelections =
-    snapshotWorkspaceProviderSelections(artifactRoot)
+  let previousVersion = readExistingVersion(artifactRoot)
+  assertNoCoreDowngrade(previousVersion, currentVersion)
+  assertNoCoreDowngrade(currentFrameworkVersion(frameworkRoot(process.env.SPECRAILS_REGISTRY_HOME)), currentVersion)
 
   // Provider can be FORCED via --provider (e.g. specrails-desktop updating one
   // provider on a multi-provider workspace, where auto-detection would always
@@ -150,15 +151,6 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
   }
   const { providerDir } = derivedPaths(provider)
   ok(`Detected provider: ${provider} (${providerDir})`)
-  if (artifactRoot !== codeRoot) {
-    resolveArtifacts(repoRoot, {
-      allocate: true,
-      allocator: 'core-standalone',
-      home: process.env.SPECRAILS_REGISTRY_HOME,
-      providers: [provider],
-      coreVersion: currentVersion,
-    })
-  }
 
   // ─── Resolve --only scope ────────────────────────────────────────
   const scope = resolveScope(flags.only)
@@ -189,12 +181,27 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
     return { repoRoot, previousVersion, currentVersion, provider, dryRun, scope }
   }
 
+  const fwDir = frameworkRoot(process.env.SPECRAILS_REGISTRY_HOME)
+  return withFrameworkLifecycleLock(fwDir, async () => {
+  previousVersion = readExistingVersion(artifactRoot)
+  if (!pathExists(marker)) throw new PrerequisiteError('No existing specrails install detected at ' + repoRoot + '. Run init first.')
+  assertNoCoreDowngrade(previousVersion, currentVersion)
+  assertNoCoreDowngrade(currentFrameworkVersion(fwDir), currentVersion)
+  const previousSelections = snapshotWorkspaceProviderSelections(artifactRoot)
+  const surfaces = [
+    ...['.claude', '.codex', '.gemini', '.kimi-code', 'AGENTS.md', 'GEMINI.md', '.gitignore'].map((name) => path.join(artifactRoot, name)),
+    ...['specrails-version', 'specrails-manifest.json', 'setup-templates', 'runtime'].map((name) => path.join(artifactRoot, '.specrails', name)),
+    path.join(fwDir, 'current'), path.join(fwDir, currentVersion),
+  ]
+  return withInstallRollback(surfaces, async () => {
   // ─── v5 migration: remove artefacts a pre-v5 install left behind ─────
   // Runs BEFORE the re-scaffold so obsolete agents/commands/staging are gone
   // before the fresh v5 template set is placed. Reserved paths (profiles, custom-*)
   // and files the installer never owned are left untouched.
   if (scope === 'all' || scope === 'core') {
-    migratePreV5Install({ artifactRoot, providerDir })
+    for (const installedProvider of new Set([provider, ...Object.keys(previousSelections)])) {
+      migratePreV5Install({ artifactRoot, providerDir: derivedPaths(installedProvider as Provider).providerDir })
+    }
   }
 
   step(`Update: refreshing scaffold [scope=${scope}] (${previousVersion ?? '?'} → ${currentVersion})`)
@@ -204,7 +211,6 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
     // new) version dir, atomically swap `current`, then RE-ASSEMBLE the
     // workspace (re-link the static subtrees at the new `current` + re-seed the
     // project layer). `assembleProjectWorkspace` rewrites the manifest itself.
-    const fwDir = frameworkRoot(process.env.SPECRAILS_REGISTRY_HOME)
     ensureFramework({
       scriptDir,
       frameworkDir: fwDir,
@@ -212,6 +218,7 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
       providerDir,
       version: currentVersion,
       selectedAgents,
+      requiredProviders: Object.keys(previousSelections) as Provider[],
     })
     reassembleWorkspaceProviders({
       workspace: artifactRoot,
@@ -228,31 +235,30 @@ export async function runUpdate(flags: UpdateFlags): Promise<UpdateResult> {
       // In-repo updates COPY real files; relocated workspaces symlink.
       copyStatics: artifactRoot === codeRoot,
     })
-    if (provider === 'kimi') {
+    if (provider === 'kimi' || provider === 'gemini') {
       await installOpenSpecProject(codeRoot, provider, artifactRoot)
     }
     ok(`Re-linked ${providerDir}/ at framework ${currentVersion} + rewrote manifest`)
   } else if (scope === 'rules' || scope === 'agents') {
     rescaffoldComponent(scope, { scriptDir, artifactRoot })
 
-    step('Update: rewriting manifest')
-    const manifest: SpecrailsManifest = buildManifest({
-      scriptDir,
-      repoRoot: artifactRoot,
-      version: currentVersion,
-      providers: [provider],
-      primaryProvider: provider,
-    })
-    const { manifestPath, versionPath } = writeManifestFiles(artifactRoot, manifest)
-    ok(`Wrote ${path.relative(artifactRoot, manifestPath)}`)
-    ok(`Wrote ${path.relative(artifactRoot, versionPath)}`)
+    info(`Refreshed ${scope}; complete framework remains ${previousVersion ?? 'unknown'}. Run a full update to advance its version.`)
   }
 
+  const installedVersion = readExistingVersion(artifactRoot)
+  if ((scope === 'all' || scope === 'core') && installedVersion !== currentVersion) {
+    throw new InstallerError(`Update did not install the expected framework ${currentVersion}; found ${installedVersion ?? 'none'}`, 41)
+  }
+  if (artifactRoot !== codeRoot && (scope === 'all' || scope === 'core')) {
+    recordSuccessfulInstall(repoRoot, { home: process.env.SPECRAILS_REGISTRY_HOME, providers: [provider], coreVersion: currentVersion })
+  }
   step('Update complete')
-  info(`specrails-core ${previousVersion ?? '?'} → ${currentVersion}`)
+  info(`specrails-core ${previousVersion ?? '?'} → ${installedVersion ?? '?'}`)
   // Terminal sentinel for programmatic consumers (see comment in init.ts).
   ok('update complete')
-  return { repoRoot, previousVersion, currentVersion, provider, dryRun: false, scope }
+  return { repoRoot, previousVersion, currentVersion, provider, dryRun: false, scope, installedVersion }
+  })
+  })
 }
 
 /**

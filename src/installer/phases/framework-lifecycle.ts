@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { assertNoCoreDowngrade, currentFrameworkVersion } from '../util/install-transaction.js'
 
 import { InstallerError } from '../util/errors.js'
 import { isDir, pathExists } from '../util/fs.js'
@@ -171,6 +172,7 @@ export function assertFrameworkVersionComplete(
 export function materializeFrameworkVersion(
   input: MaterializeFrameworkVersionInput,
 ): Provider[] {
+  assertNoCoreDowngrade(currentFrameworkVersion(input.frameworkDir), input.version)
   const required = resolveRequiredFrameworkProviders(input)
   if (required.length === 0) {
     throw new InstallerError(

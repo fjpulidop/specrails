@@ -3,46 +3,189 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Retry publication/notifications for an existing stable tag (vX.Y.Z)'
+        type: string
+        required: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+  contents: read
+
+# Publishing is never interrupted by a newer push or a second retry.
+concurrency:
+  group: core-release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  ci-gate:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.ci.outputs.run_id }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+      - name: Require successful CI at this exact main commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/await-ci.mjs
 
-      - uses: googleapis/release-please-action@7987652d64b4581673a76e33ad5e98e3dd56832f  # v4.1.3
+  release-please:
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+      - name: Skip obsolete main pushes before creating release metadata
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/await-ci.mjs --current-main
+      - name: Explain the repository-token fallback
+        if: steps.head.outputs.current == 'true'
+        env:
+          RELEASE_PAT_CONFIGURED: ${{ secrets.RELEASE_PAT != '' }}
+        run: |
+          if [ "$RELEASE_PAT_CONFIGURED" != "true" ]; then
+            echo '::warning::RELEASE_PAT is not configured. Release Please will use GITHUB_TOKEN; its generated PR workflows require a maintainer to select Approve workflows to run. Configure a repository-scoped RELEASE_PAT for automatic CI, or approve the pending runs after bot updates. Do not bypass branch protection.'
+          fi
+      - if: steps.head.outputs.current == 'true'
+        uses: googleapis/release-please-action@7987652d64b4581673a76e33ad5e98e3dd56832f # v4.1.3
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
-      - if: ${{ steps.release.outputs.release_created }}
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
-        with:
-          node-version: 20.19.0
-          registry-url: https://registry.npmjs.org
-          cache: npm
-
-      # Install devDependencies so the `prepack` lifecycle hook can
-      # compile src/ → dist/ via `tsc`. Without this, `npm publish`
-      # invokes prepack with typescript missing and aborts.
-      - if: ${{ steps.release.outputs.release_created }}
-        run: npm ci
-
-      - if: ${{ steps.release.outputs.release_created }}
-        run: npm publish --provenance --access public
+  prepare-manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Validate manual tag syntax before checkout
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node -e 'if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(process.env.RELEASE_TAG || "")) process.exit(1)'
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ format('refs/tags/{0}', inputs.tag) }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Validate existing tag and main ancestry
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/validate-release.mjs
+      # Dependency install, tests and tarball smoke never receive an npm token
+      # or OIDC permission, including this manual recovery route.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node --test scripts/release-utils.test.mjs
+      - run: npm run test:coverage
+      - run: node scripts/verify-package.mjs "${{ runner.temp }}/core-package"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: core-package-recovery
+          path: ${{ runner.temp }}/core-package/
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Notify specrails-web of new release
-        if: ${{ steps.release.outputs.release_created }}
-        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
+  publish:
+    needs: [ci-gate, release-please, prepare-manual]
+    if: always() && ((github.event_name == 'workflow_dispatch' && needs.prepare-manual.result == 'success') || (github.event_name == 'push' && needs.ci-gate.result == 'success' && needs.release-please.outputs.created == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && needs.prepare-manual.outputs.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Validate tag, tested SHA and package versions again before publication
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag }}
+          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && needs.prepare-manual.outputs.sha || github.sha }}
+        run: node scripts/validate-release.mjs
+      - name: Download the exact tarball tested by CI
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: core-package
+          path: ${{ runner.temp }}/core-package
+          run-id: ${{ needs.ci-gate.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Download the exact tarball tested by manual recovery
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: core-package-recovery
+          path: ${{ runner.temp }}/core-package
+      - name: Publish verified bytes (or resume an identical prior publication)
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/publish-package.mjs "${{ runner.temp }}/core-package"
+
+  notify:
+    needs: publish
+    if: always() && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify Desktop to check the exact released integration contract
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          repository: fjpulidop/specrails-desktop
+          event-type: specrails-core-released
+          client-payload: '{"core_version":"${{ needs.publish.outputs.version }}"}'
+      - name: Notify the website (legacy version tag convention)
+        if: '!cancelled()'
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           repository: fjpulidop/specrails-web
           event-type: specrails-core-released
-          client-payload: '{"core_version": "${{ steps.release.outputs.tag_name }}"}'
+          client-payload: '{"core_version":"v${{ needs.publish.outputs.version }}"}'

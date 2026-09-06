@@ -1,373 +1,166 @@
 # specrails-core
 
-[![npm version](https://img.shields.io/npm/v/specrails-core.svg)](https://www.npmjs.com/package/specrails-core)
-[![GitHub Stars](https://img.shields.io/github/stars/fjpulidop/specrails-core?style=social)](https://github.com/fjpulidop/specrails-core)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![npm downloads](https://img.shields.io/npm/dw/specrails-core.svg)](https://www.npmjs.com/package/specrails-core)
-[![AI providers](https://img.shields.io/badge/providers-Claude%20%7C%20Codex%20%7C%20Gemini%20%7C%20Kimi-6f42c1)](#provider-support)
+[![CI](https://github.com/fjpulidop/specrails-core/actions/workflows/ci.yml/badge.svg)](https://github.com/fjpulidop/specrails-core/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/specrails-core.svg)](https://www.npmjs.com/package/specrails-core)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Your agentic development team. From idea to production code.**
+Specrails Core installs specification-driven development workflows into a project. It gives your AI CLI three baseline roles—architect, developer and reviewer—plus provider-native commands, OpenSpec integration and project conventions. You choose the provider; Core supplies the workflow and its local artifacts.
 
-One command turns your repo into a spec-driven pipeline with three specialized AI agents working together through OpenSpec — architect, developer, reviewer — all adapted to your codebase. Need more specialists? Add your own via a profile.
+Use Core directly from Claude Code, Codex CLI, Gemini CLI or Kimi Code. For mission conversations, a shared project board, execution loops and delivery controls, use [Specrails Desktop](https://github.com/fjpulidop/specrails-desktop).
 
-```bash
-npx specrails-core@latest init   # install into the current repo — ready to use immediately
-```
-
-> **Requirements:** one supported AI CLI, git, and Node 20.19.0+. Cross-platform:
-> macOS, Linux, and Windows. Use `--provider claude|codex|gemini|kimi` to
-> override auto-detection.
-
----
-
-## How it works
-
-```
-Idea  →  Architecture  →  Implementation  →  Review  →  PR
-         (sr-architect)   (sr-developer)    (sr-reviewer)
-```
-
-Run `/specrails:implement "add dark mode"` — the pipeline designs, builds, reviews, and ships a pull request. No hand-holding.
-
-The three core agents are adapted to your project's stack and conventions at install time, and the per-layer rules carry your codebase's patterns. Extend the trio with your own specialists through a [profile](#agent-profiles).
-
----
+This README describes the current source tree. `npx specrails-core@latest` installs the published package, not unmerged changes. Check the [release notes](https://github.com/fjpulidop/specrails-core/releases), or [build this checkout](#develop-from-source) when testing unreleased work.
 
 ## Quick start
 
-```bash
-# 1. Install into the current repo — one pass, no follow-up step
-npx specrails-core@latest init
+You need **Node.js 20.19.0+**, Git and at least one installed, authenticated AI CLI. A provider may impose a higher Node or operating-system requirement than Core itself. Install providers through their own supported installation flow.
 
-# 2. Start building
-> /specrails:implement "add user authentication"
-> /specrails:implement #1, #2          # from local tickets (default)
-> /specrails:implement #42             # from GitHub Issues (if configured)
+From the project you want to configure:
+
+```sh
+npx specrails-core@latest init --provider claude
 ```
 
-That's it. Installation places the three agents, commands, rules, and OpenSpec skills directly — no wizard, no AI step. The pipeline takes over.
+Choose `claude`, `codex`, `gemini` or `kimi`. The default installer collects agent and model configuration interactively. For a non-interactive installation using defaults:
 
----
-
-## Provider support
-
-| Provider | Runtime command | Project surface | Workflow syntax |
-|----------|-----------------|-----------------|-----------------|
-| Claude Code | `claude` | `.claude/` | `/specrails:<command>` |
-| Codex CLI | `codex` | `.codex/` | provider-native skills |
-| Gemini CLI | `gemini` | `.gemini/` | `/specrails:<command>` |
-| Kimi Code | managed Node skill runner → external `kimi -p` | `.kimi-code/` | `/skill:specrails-<command>` in the TUI |
-
-Kimi is an external CLI dependency, just like the other providers. SpecRails
-does not bundle a Kimi binary, start `kimi web`, or own a Kimi server. Install
-Kimi Code separately, run `kimi login` once, then select it explicitly or let
-the installer detect it. Parallel Kimi roles are submitted as one bounded
-foreground wave; Core creates/reuses their git worktrees, attributes each
-child stream, and waits for aggregate completion—without a server. See the
-[Kimi setup guide](./docs/user-docs/getting-started-kimi.md).
-
-## What gets installed
-
-Everything lands in your repo — nothing auto-updates, nothing phones home. You own it, you commit it.
-
-| Category | Location | Purpose |
-|----------|----------|---------|
-| **Agents** | `.claude/agents/` (Claude) or the provider-native skills tree (`.codex/`, `.gemini/`, `.kimi-code/`) | The three core agents (sr-architect, sr-developer, sr-reviewer) |
-| **Commands** | `.claude/commands/specrails/` | Workflow commands (`/specrails:implement`, `/specrails:why`, ...) |
-| **Kimi workflow skills** | `.kimi-code/skills/specrails-*/SKILL.md` | `/skill:specrails-*` directory-form skills |
-| **Kimi headless runner** | `.kimi-code/specrails/run-skill.mjs` | Materializes Kimi's native skill-activation flow for headless runs |
-| **OpenSpec skills** | `.claude/commands/opsx/` (or the provider-native skills directory) | `/opsx:*` commands for spec artefacts |
-| **Config** | `.specrails/config.yaml` | Stack, CI commands, git workflow |
-| **Rules** | `.specrails/rules/*.md` | Per-layer coding conventions |
-| **Memory** | `.specrails/agent-memory/` | Persistent knowledge — agents learn across sessions |
-| **Pipeline state** | `.specrails/pipeline/` | In-flight feature state for parallel builds |
-| **Profiles** _(optional, yours)_ | `.specrails/profiles/*.json` | Add custom specialists + task routing |
-
-To update, re-run the installer:
-
-```bash
-npx specrails-core@latest init
+```sh
+npx specrails-core@latest init --yes --provider claude
 ```
 
-Or run `npx specrails-core@latest update` to refresh in place. Update leaves your `.specrails/` data, profiles, and `custom-*` agents untouched. Upgrading from v4? Update also removes the artefacts v5 no longer ships (the enrich wizard, install tiers, and the non-core agents) and prints exactly what it removed — see [Migrating from v4](#migrating-from-v4).
+Core 5 installs the baseline roles and workflows directly; it does not invoke a model for an enrichment phase. Installing dependencies or OpenSpec may require network access. Review the generated project configuration before running an implementation.
 
----
+Open the selected AI CLI in that project and use its native workflow syntax:
 
-## Why specrails
+| Provider | Executable | Implement | Batch | Retry |
+| --- | --- | --- | --- | --- |
+| Claude Code | `claude` | `/specrails:implement` | `/specrails:batch-implement` | `/specrails:retry` |
+| Codex CLI | `codex` | `$implement` | `$batch-implement` | `$retry` |
+| Gemini CLI | `gemini` | `/specrails:implement` | `/specrails:batch-implement` | `/specrails:retry` |
+| Kimi Code | `kimi` | `/skill:specrails-implement` | `/skill:specrails-batch-implement` | `/skill:specrails-retry` |
 
-| | specrails | Plain Claude Code | Cursor / Copilot |
-|---|---|---|---|
-| Structured pipeline | ✅ Architect → Dev → Review → PR | ❌ Manual | ❌ Manual |
-| Adapts to your codebase | ✅ Reads your real stack/CI | ⚠️ Prompts only | ❌ |
-| Spec-driven (OpenSpec) | ✅ Proposal → design → tasks → specs | ❌ | ❌ |
-| Parallel feature builds | ✅ Git worktrees | ❌ | ❌ |
-| Institutional memory | ✅ Agents learn across sessions | ❌ | ❌ |
-| Open source | ✅ MIT | N/A | ❌ |
+For example, enter this **inside Claude Code or Gemini CLI**, not in your shell:
 
-specrails is not a chat interface. It's a **development pipeline** that coordinates specialised agents through your existing tools (GitHub Issues, git, CI).
-
----
-
-## The agents
-
-Three agents, tightly integrated through the OpenSpec lifecycle (`/opsx:ff` → `/opsx:apply` → `/opsx:archive`):
-
-| Agent | Model | Role |
-|-------|-------|------|
-| **sr-architect** | Sonnet | Designs features: proposal, technical design, task breakdown |
-| **sr-developer** | Sonnet | Full-stack implementation (tests and docs included per task) |
-| **sr-reviewer** | Sonnet | Single quality gate: correctness, TDD/spec completeness, security, and performance; runs CI, fixes issues, records learnings |
-
-Need a specialist — a dedicated security reviewer, a data-engineering developer, a docs agent? Author it as a `custom-*` agent and declare it in a [profile](#agent-profiles); the pipeline routes to it. The installer never ships or manages non-core agents, so your custom agents are always yours.
-
----
-
-## Commands
-
-### `/specrails:implement` — Build features
-
-```bash
-/specrails:implement "add dark mode"        # from a description
-/specrails:implement #85, #71               # from tickets
+```text
+/specrails:implement "add keyboard navigation to the settings page"
+/specrails:implement #1, #2
 ```
 
-Architect designs → developer builds → reviewer validates → PR created. Multiple features run in parallel with git worktrees.
+Kimi integration targets Kimi Code 0.27.0+. Its headless path uses the installed `.kimi-code/specrails/run-skill.mjs` helper to activate the workflow before calling the external CLI; passing a slash command directly to `kimi -p` is not equivalent. See [Kimi setup](docs/user-docs/getting-started-kimi.md) and [provider pipeline contracts](docs/user-docs/provider-pipelines.md).
 
-#### Letting a host own version control (`SPECRAILS_GIT_AUTO`)
+## How implementation works
 
-By default the pipeline ships automatically (`GIT_AUTO=true`): it creates a branch, commits, pushes, and opens a pull request. When specrails-core runs **inside a host that owns version control itself** — such as [specrails-desktop](https://github.com/fjpulidop/specrails-desktop), which runs each pipeline in an isolated git worktree and opens the pull request for you — that host sets the `SPECRAILS_GIT_AUTO` environment variable to `false`.
-
-When `SPECRAILS_GIT_AUTO=false` (or `0`), the Ship phase is forced onto the **manual** path regardless of configuration: the pipeline stops at "code written and verified" and makes **no branch, commit, push, or PR** — the host does that. This prevents a second, uncoordinated pull request. Leave the variable unset for the normal standalone behaviour (automatic shipping, subject to your `GIT_AUTO` configuration). It composes with `--dry-run`, which independently skips all git/GitHub/backlog operations.
-
-#### Dry-run / preview mode
-
-Not ready to commit? Run the full pipeline without touching git or GitHub:
-
-```bash
-/specrails:implement "add dark mode" --dry-run
-/specrails:implement #85 --preview            # --preview is an alias for --dry-run
+```text
+Specification → Architecture → Implementation → Review → Delivery
+                sr-architect   sr-developer      sr-reviewer
 ```
 
-All agents run normally. Generated files land in `.claude/.dry-run/<feature-name>/` instead of your working tree. No branches, commits, PRs, or issue updates are created.
+The architect produces the OpenSpec proposal, design and tasks. The developer implements the agreed work. The reviewer checks the result against the spec and project verification commands. Delivery follows the configured Git workflow and the execution owner's policy.
 
-When you're happy with the preview, apply the cached output:
+The current source installs a local pipeline helper for persisted phase state, explicit role handoffs and verification receipts. Retry resumes the first incomplete or invalid phase; it does not treat an earlier success as valid after its inputs change. A batch retains its tickets' requirements and repository identities in an aggregate change. See the [pipeline contract](docs/user-docs/provider-pipelines.md) for the execution context and validation limits.
 
-```bash
-/specrails:implement --apply add-dark-mode    # copies files to real paths, then ships
+Standalone automatic delivery can create branches, commits, pushes and pull requests when enabled. Set the project's Git workflow deliberately; model execution and repository writes are real operations, not a preview by default. GitHub pull requests additionally require an authenticated `gh` CLI.
+
+When a host such as Desktop owns worktrees and delivery, it sets `SPECRAILS_GIT_AUTO=false` and supplies the execution context. Core then leaves branch creation, commits, pushes and PRs to that host. Multi-repository contexts must explicitly identify the selected repositories and the OpenSpec/backlog owner; an additional readable folder is not automatically an implementation target.
+
+## Installed files and ownership
+
+Standalone installation normally copies committable artifacts into the repository and uses a shared framework store under `~/.specrails/`. Relocated installations, including Desktop-managed workspaces, can keep framework links and project artifacts outside the checkout. The resolved workspace determines where these files live.
+
+| Surface | Purpose |
+| --- | --- |
+| `.claude/`, `.codex/`, `.gemini/`, `.kimi-code/` | Selected provider's agents, commands or skills |
+| `openspec/` | Specifications and change artifacts |
+| `.specrails/config.yaml` and `install-config.yaml` | Project workflow and installation configuration |
+| `.specrails/rules/` and `agent-memory/` | Coding conventions and retained agent notes |
+| `.specrails/runtime/` and `pipeline/` | Installed execution helper and run state in the current source |
+| `.specrails/local-tickets.json` | Local backlog, when that backlog provider is selected |
+| `.specrails/profiles/` | User-owned profiles and model/routing choices |
+
+Local tickets do not require GitHub or Jira. External backlog integrations require their own credentials and configuration. See [local tickets](docs/local-tickets.md) and [backlog migration](docs/migration-guide.md).
+
+Managed files can be regenerated by updates. Keep extensions in documented user-owned locations rather than relying on edits to generated agents surviving an update.
+
+## Extend the agents
+
+Profiles can select models and route tasks to additional specialists where the provider workflow supports them. Keep the three baseline roles, then add your custom agents and routing. The profile schema is [schemas/profile.v1.json](schemas/profile.v1.json).
+
+```sh
+npx specrails-core@latest profile validate .specrails/profiles/default.json
 ```
 
-To discard without applying:
+The installer reserves these extension paths:
 
-```bash
-rm -rf .claude/.dry-run/add-dark-mode/
-```
+- `.specrails/profiles/**`
+- `.claude/agents/custom-*.md`
+- `.kimi-code/skills/custom-*/**`
 
-### `/specrails:retry` — Resume a failed pipeline
+Use the `custom-` prefix for protected custom roles. The legacy nested Kimi custom-role layout is preserved during migration as well. Other provider-managed surfaces are not a blanket guarantee that arbitrary local changes survive regeneration. See [customization](docs/customization.md) for the broader configuration model.
 
-```bash
-/specrails:retry add-dark-mode                # resume from the failed phase
-/specrails:retry add-dark-mode --from reviewer
-/specrails:retry --list                       # show resumable pipeline states
-```
+## Update an existing project
 
-Picks up a `/specrails:implement` run from where it stopped, reusing the OpenSpec artefacts already produced.
+Updating the executable and refreshing a project's artifacts are separate operations. From the project directory:
 
----
-
-## Agent profiles
-
-Profiles are **the way to extend the core trio**. They are declarative JSON files that tell `/specrails:implement` which agents to use, which models to run them with, and how to route tasks to specialists. Without a profile the pipeline runs the three baseline agents; with one, you add your own `custom-*` agents and routing. One project can define many profiles (e.g. `default`, `data-heavy`, `security-heavy`) and run different features with different profiles — useful for concurrent rails in `/specrails:batch-implement`.
-
-### File layout
-
-```
-<project>/.specrails/
-  profiles/
-    default.json          # checked into git, team-shared
-    data-heavy.json       # checked into git, team-shared
-    .user-preferred.json  # gitignored, your personal default
-```
-
-### Resolution order
-
-When running the pipeline, the active profile is resolved in this order:
-
-1. `$SPECRAILS_PROFILE_PATH` environment variable (absolute path to a JSON snapshot)
-2. Provider default: `<cwd>/.specrails/profiles/project-default.json` for
-   Claude, or `<cwd>/.specrails/profiles/kimi-default.json` for Kimi
-3. No profile — the three baseline agents (`sr-architect`, `sr-developer`, `sr-reviewer`)
-
-Tools such as [specrails-desktop](https://github.com/fjpulidop/specrails-desktop) set `$SPECRAILS_PROFILE_PATH` to a job-scoped snapshot so concurrent rails can run independent profiles.
-
-### Schema
-
-The v1 profile schema is published at [`schemas/profile.v1.json`](./schemas/profile.v1.json). Example:
-
-```json
-{
-  "schemaVersion": 1,
-  "name": "data-heavy",
-  "description": "Data engineering rail with stricter review",
-  "orchestrator": { "model": "opus" },
-  "agents": [
-    { "id": "sr-architect",     "model": "opus",   "required": true },
-    { "id": "sr-data-engineer", "model": "sonnet" },
-    { "id": "sr-developer",     "model": "sonnet", "required": true },
-    { "id": "sr-reviewer",      "model": "opus",   "required": true }
-  ],
-  "routing": [
-    { "tags": ["etl", "schema", "data"], "agent": "sr-data-engineer" },
-    { "default": true, "agent": "sr-developer" }
-  ]
-}
-```
-
-Baseline agents (`sr-architect`, `sr-developer`, `sr-reviewer`) MUST appear in `agents[]`. The `routing` array is ordered — first rule whose `tags` intersects the task's tags wins; the terminal `default: true` rule catches everything else.
-
-### Reserved paths
-
-The following paths are **reserved** — `specrails-core update` will never create, modify, or delete anything inside them:
-
-- `.specrails/profiles/**` — profile JSON files (yours and desktop-authored).
-- `.claude/agents/custom-*.md` — your custom agents. Use the `custom-` prefix to opt in to this protection.
-- `.kimi-code/skills/custom-*/**` — your custom Kimi role skills. Pre-release
-  `.kimi-code/skills/rails/custom-*` roles are also reserved while Core safely
-  migrates them into this discoverable direct-child layout.
-
-This contract is what lets you safely hand-author (or let specrails-desktop author) profiles and custom agents without fear of the next `update` overwriting your work. Other paths managed by specrails-core (`.specrails/install-config.yaml`, `.specrails/specrails-version`, etc.) remain under update's control. Audited by `src/installer/__tests__/reserved-paths.test.ts` on every CI run.
-
----
-
-## Local ticket management
-
-specrails-core ships with a built-in ticket system — no GitHub account or external tools required.
-
-Tickets live in `.specrails/local-tickets.json` alongside your code. They're plain JSON and git-friendly.
-
-**Local tickets are the default** — no GitHub account or credential setup required.
-
-```bash
-/specrails:implement #1, #4                # implement by ticket ID
-/specrails:propose-spec                    # create a ticket from a spec proposal
-```
-
-See [docs/local-tickets.md](./docs/local-tickets.md) for the full schema reference, concurrency model, and command integration details.
-
-Migrating from GitHub Issues or JIRA? See [docs/migration-guide.md](./docs/migration-guide.md).
-
----
-
-## Migrating from v4
-
-v5 is a breaking release. It removes the `/specrails:enrich` wizard, the quick/full install tiers, and the nine non-core agents (product manager/analyst, layer-specific developers and reviewers, test-writer, doc-sync, merge-resolver). The installer is now mode-less: `init` places the three core agents directly, in one pass.
-
-To upgrade an existing install:
-
-```bash
+```sh
+npx specrails-core@latest --version
+npx specrails-core@latest update --dry-run
 npx specrails-core@latest update
+npx specrails-core@latest doctor
 ```
 
-Update removes the artefacts v5 no longer ships (installer-owned agents, commands, and enrich staging) and prints the exact list of removed files. It never touches your `.specrails/profiles/**` or `.claude/agents/custom-*.md`.
+Use an exact published package version instead of `latest` when reproducibility matters. The selected CLI supplies the framework bytes; the current source rejects an older CLI overwriting a newer installed framework. It retains recovery information for failed updates and does not report a complete upgrade after a partial component refresh.
 
-- **Relied on a removed agent?** Its body is plain Markdown — copy the v4 agent to `.claude/agents/custom-<name>.md` and declare it in a [profile](#agent-profiles). Same behaviour, now user-owned.
-- **Have a v4 profile that lists removed agents?** It keeps working: the pipeline warns and skips any profile agent whose file no longer exists, and continues with the rest. The three baseline agents remain required.
-- **Using specrails-desktop?** Pin it to `specrails-core@^4` until a desktop release adopts the mode-less `init --from-config` flow.
+Existing provider selections are preserved by the current update implementation. Installing support for an additional provider does not require discarding the other provider's managed artifacts. See [installation and update consistency](docs/user-docs/core-updates.md) for version checks, copied versus linked workspaces, concurrent updates and rollback behavior.
 
----
+### Migrating from Core 4
 
-## Prerequisites
+Core 5 removes the `enrich` command, the quick/full installation tiers and the previously bundled non-core specialist agents. `init` performs deterministic placement instead of launching the old enrichment wizard.
 
-| Tool | Required | Purpose |
-|------|----------|---------|
-| **One supported AI CLI** | Yes | Claude Code, Codex CLI, Gemini CLI, or Kimi Code |
-| **Kimi Code 0.27.0+** | For Kimi projects | Install from the [official Kimi Code guide](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started), then run `kimi login` |
-| **git** | Yes | Repository detection |
-| **Node 20.19.0+** | Yes | Needed for `npx specrails-core@latest init` (the floor required by the pinned OpenSpec 1.4.1 CLI). Cross-platform: macOS, Linux, Windows (10/11, x64 + ARM64 via emulation). |
-| **GitHub CLI** (`gh`) | Optional | Backlog sync to GitHub Issues, PR creation. Not needed with local tickets. |
+Before upgrading, review customizations and profiles that refer to removed agents. Move any specialist you want to retain into a protected `custom-*` role and update its profile reference. The migration removes installer-owned legacy artifacts; protected profiles and custom agents remain user-owned.
 
-The installer checks for prerequisites and offers to install missing ones.
+Desktop must support the selected Core lifecycle. Current Desktop source supports Core 5, but older installed Desktop releases can differ. Updating this repository or the global CLI alone does not upgrade a running Desktop application or every project's copied artifacts.
 
----
+## Develop from source
 
-## Supported stacks
+Core uses one npm dependency tree. Node **20.19.0+** is the package minimum; CI exercises the declared platform/runtime matrix.
 
-Stack-agnostic. The installer detects and adapts the agents and rules to whatever you're running:
+```sh
+git clone https://github.com/fjpulidop/specrails-core.git
+cd specrails-core
+npm ci
+npm test
+```
 
-- **Backend:** Python/FastAPI, Node/Express, Go/Gin, Rust/Actix, Java/Spring, Ruby/Rails, .NET
-- **Frontend:** React, Vue, Angular, Svelte, Next.js, Nuxt
-- **Database:** PostgreSQL, MySQL, SQLite, MongoDB, Redis
-- **CI/CD:** GitHub Actions, GitLab CI, Jenkins, Makefile
-- **Testing:** pytest, vitest, jest, go test, cargo test, rspec
+`npm test` builds `dist/`, checks types and runs the tests. To use the current checkout against a separate project:
 
----
+```sh
+npm run build
+node bin/specrails-core.mjs --version
+node bin/specrails-core.mjs init --root-dir /absolute/path/to/project --provider codex
+```
 
-## Design principles
+That final command installs into the target project. Use a disposable fixture when testing installation behavior. No global npm install is needed to execute this checkout.
 
-1. **Local by default** — Everything lives in your repo. No cloud services, no telemetry, no phone home.
-2. **Mode-less** — One install path. `init` places everything directly; there is no follow-up wizard.
-3. **Context-first** — Every generated file uses your real paths, patterns, and CI commands.
-4. **Spec-driven** — Every feature flows through OpenSpec (proposal → design → tasks → specs), not ad-hoc prompts.
-5. **Institutional memory** — Agents learn across sessions. Reviewer learnings feed back to future developers.
-6. **Parallel-safe** — Multiple features implemented simultaneously via git worktrees with automatic merge.
-7. **Yours to extend** — The core is three agents; specialists come from profiles + `custom-*` agents the installer never touches.
+| Command | Purpose |
+| --- | --- |
+| `npm run build` | Compile the installer and runtime |
+| `npm run typecheck` | Check production and test types |
+| `npm test` | Build, typecheck and run tests |
+| `npm run test:coverage` | Build and run the coverage suite |
+| `npm run test:scripts` | Run release and package guard regressions |
+| `npm run check:package` | Build, install and verify a temporary npm consumer |
+| `npm run ci` | Run local type, release, coverage and package checks |
+| `npm pack` | Build and create a package tarball without publishing |
 
----
+See [CI and releases](docs/ci-cd.md) for platform gates and publication requirements. Tests with simulated provider processes do not establish live compatibility with every CLI version, and an installer test does not prove a model will successfully implement every requested feature.
 
-## FAQ
+## Data, security and documentation
 
-**Can I customise the agents after installation?**
-Yes. Everything in the selected provider tree and `.specrails/` is yours to
-edit — agent prompts, rules, config. For Kimi, customize `.kimi-code/skills/`,
-`.kimi-code/rules/`, and the managed block in `.kimi-code/AGENTS.md`;
-`custom-*` role skills are preserved. To add a specialist, declare a
-`custom-*` agent in a profile.
+Core's configuration, specs and run state are local files. Provider CLIs still send supplied context to their configured model services; package installation, GitHub/Jira and MCP integrations may also use the network. Model usage is billed according to your provider. Review the repository's commands and agent permissions before execution.
 
-**How do I update an install?**
-Run `npx specrails-core@latest update` (or re-run `init`) to refresh the agents/commands. Both leave your `.specrails/` data, profiles, and `custom-*` agents untouched.
+- [CLI reference](docs/user-docs/cli-reference.md)
+- [Provider pipeline contracts](docs/user-docs/provider-pipelines.md)
+- [Core update consistency](docs/user-docs/core-updates.md)
+- [Local tickets](docs/local-tickets.md)
+- [Documentation index](docs/README.md)
+- [Contributing](CONTRIBUTING.md), [security reporting](SECURITY.md) and [changelog](CHANGELOG.md)
 
-**Does this work without GitHub CLI?**
-Yes. Local tickets are the default and need no external tools. `/specrails:implement "description"` also works without `gh` — it just skips automated PR creation.
-
-**Can I use local tickets and GitHub Issues together?**
-Not simultaneously for the same project — backlog commands use one active provider at a time. You can migrate from GitHub Issues to local tickets using the [migration guide](./docs/migration-guide.md).
-
-**How much does it cost to run?**
-Cost depends on the selected provider, model, and workload. SpecRails does not
-add a model surcharge. Kimi's stream output does not currently report a native
-USD cost, so consumers must display it as unavailable rather than inventing an
-estimate.
-
-**Does it work with private repos?**
-Yes. Orchestration runs through the selected local CLI. The provider still
-connects to its model API and any MCP/integration endpoints you configure.
-
-**How do I use specrails with Kimi?**
-Install and authenticate Kimi Code, then run
-`npx specrails-core@latest init --provider kimi`. Invoke the generated workflows
-as `/skill:specrails-implement`, `/skill:specrails-enrich`, and so on in Kimi's
-interactive TUI. Headless callers use the managed
-`.kimi-code/specrails/run-skill.mjs` helper: Kimi 0.27 sends a slash command
-passed directly to `kimi -p` as literal text, so the helper first renders the
-same skill prompt as Kimi's native activation path and then starts external
-`kimi -p --output-format stream-json`. No server installation is required.
-
----
-
-## Related
-
-- **[specrails-desktop](https://github.com/fjpulidop/specrails-desktop)** — desktop dashboard that visualises specrails pipelines (macOS, open source).
-- **[specrails.dev](https://specrails.dev)** — landing page and documentation.
-
----
-
-## Support
-
-If specrails-core is useful to you, you can donate on [Ko-fi](https://ko-fi.com/D1D81Y002C) ☕ to support ongoing development.
-
-[![Donate on Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-FF5E5B?logo=kofi&logoColor=white&style=flat-square)](https://ko-fi.com/D1D81Y002C)
-
----
-
-## License
-
-MIT — [fjpulidop](https://github.com/fjpulidop)
+Specrails Core is available under the [MIT license](LICENSE). Development can be supported through [Ko-fi](https://ko-fi.com/D1D81Y002C).

@@ -380,7 +380,7 @@ describe('install-config', () => {
         >
       }
 
-      expect(contract.schemaVersion).toBe('3.2')
+      expect(contract.schemaVersion).toBe('4.0')
       expect(contract.configSchema.fields.provider).toBe(
         'string — claude | codex | gemini | kimi',
       )

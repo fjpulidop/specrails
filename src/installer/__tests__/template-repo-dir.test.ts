@@ -49,6 +49,7 @@ const IN_SCOPE_FILES = [
   'commands/specrails/retry.md',
   // Codex skills (orchestrators + baseline trio)
   'codex-skills/implement/SKILL.md',
+  'codex-skills/batch-implement/SKILL.md',
   'codex-skills/retry/SKILL.md',
   'codex-skills/rails/sr-architect/SKILL.md',
   'codex-skills/rails/sr-developer/SKILL.md',
@@ -220,7 +221,7 @@ describe('STAGE 3 — runtime templates point repo-resident artifacts at ${SPECR
       const lines = readFileSync(T(rel), 'utf8').split('\n')
       lines.forEach((line, i) => {
         if (!OPENSPEC_RE.test(line)) return
-        if (line.includes(WRAPPER)) return // wrapped — good
+        if (line.includes(WRAPPER) || line.includes('<context.artifactRoot>/openspec/')) return // explicit source/artifact root
         if (isAllowed(OPENSPEC_ALLOW, rel, line)) return // prose/report/stored
         misses.push(`${rel}:${i + 1}  ${line.trim()}`)
       })
@@ -282,19 +283,18 @@ describe('STAGE 3 — runtime templates point repo-resident artifacts at ${SPECR
     // A sanity anchor so the test cannot pass merely because everything is
     // allow-listed: assert the real wrapping landed in the key spots.
     const implement = readFileSync(T('commands/specrails/implement.md'), 'utf8')
-    expect(implement).toContain('${SPECRAILS_REPO_DIR:-.}/openspec/changes/<name>/tasks.md')
-    expect(implement).toContain('git -C "${SPECRAILS_REPO_DIR:-.}" checkout -b feat/')
-    expect(implement).toContain('git -C "${SPECRAILS_REPO_DIR:-.}" push -u origin')
-    expect(implement).toContain('(cd "${SPECRAILS_REPO_DIR:-.}" && gh ...)')
-    expect(implement).toContain('cp <worktree-path>/<file> "${SPECRAILS_REPO_DIR:-.}"/<file>')
+    expect(implement).toContain('${SPECRAILS_REPO_DIR:-.}/openspec/changes/<change>/')
+    expect(implement).toContain('explicit selected repository ID/path')
+    expect(implement).toContain('Host-owned git: no staging, commits, pushes, PRs')
+    expect(implement).not.toContain('cp <worktree-path>')
 
     const dev = readFileSync(T('agents/sr-developer.md'), 'utf8')
-    expect(dev).toContain('${SPECRAILS_REPO_DIR:-.}/openspec/changes/<name>/')
-    // The explicit source-edit instruction the developer needs.
-    expect(dev).toContain('${SPECRAILS_REPO_DIR:-.}/<path>')
+    expect(dev).toContain('${SPECRAILS_REPO_DIR:-.}/openspec/changes/<specName>/')
+    expect(dev).toContain("resolved against its task's repository")
 
     const retry = readFileSync(T('commands/specrails/retry.md'), 'utf8')
-    expect(retry).toContain('${SPECRAILS_REPO_DIR:-.}/<OPENSPEC_ARTIFACTS>tasks.md')
+    expect(retry).toContain('${SPECRAILS_REPO_DIR:-.}')
+    expect(retry).toContain('Preserve context.specs, selected roots, backlog identity and ownership')
   })
 
   it('does NOT wrap run-state paths — they follow the workspace (cwd-relative)', () => {

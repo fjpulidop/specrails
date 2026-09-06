@@ -2295,9 +2295,48 @@ function ensureWorkspaceParentDirectories(root, file) {
   }
 }
 
+/** Keep shared task data independent of each role's private cwd. */
+export function resolvePipelineEnvironment(cwd, env = process.env) {
+  const contextPath = nonEmptyString(env.SPECRAILS_EXECUTION_CONTEXT)
+  let context
+  if (contextPath) {
+    if (!path.isAbsolute(contextPath)) throw new RunnerUsageError('SPECRAILS_EXECUTION_CONTEXT must be absolute')
+    const metadata = lstatSync(contextPath)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAX_ROLE_REQUEST_BYTES) {
+      throw new RunnerUsageError('Execution context must be a bounded regular non-symlink file')
+    }
+    context = JSON.parse(readFileSync(contextPath, 'utf8'))
+    if (!isRecord(context) || context.schemaVersion !== 1 ||
+        typeof context.backlogRoot !== 'string' || !path.isAbsolute(context.backlogRoot)) {
+      throw new RunnerUsageError('Execution context requires schemaVersion 1 and an absolute backlogRoot')
+    }
+    if (context.backlogPath !== undefined &&
+        (typeof context.backlogPath !== 'string' || !path.isAbsolute(context.backlogPath))) {
+      throw new RunnerUsageError('Execution context backlogPath must be absolute')
+    }
+  }
+  const backlogRoot = context?.backlogRoot ?? nonEmptyString(env.SPECRAILS_BACKLOG_ROOT) ?? path.resolve(cwd)
+  return {
+    ...env,
+    SPECRAILS_BACKLOG_ROOT: path.resolve(backlogRoot),
+    SPECRAILS_BACKLOG_PATH: context?.backlogPath ?? nonEmptyString(env.SPECRAILS_BACKLOG_PATH) ??
+      path.join(path.resolve(backlogRoot), '.specrails', 'local-tickets.json'),
+    SPECRAILS_PIPELINE_RUNTIME: nonEmptyString(env.SPECRAILS_PIPELINE_RUNTIME) ??
+      path.join(path.resolve(cwd), '.specrails', 'runtime', 'pipeline.mjs'),
+    ...(contextPath ? { SPECRAILS_EXECUTION_CONTEXT: contextPath } : {}),
+  }
+}
+
 export async function runSkillCli(argv, dependencies = {}) {
   const cwd = dependencies.cwd ?? process.cwd()
   const parsedArgs = parseRunnerArgs(argv)
+  const inputEnv = dependencies.env ?? process.env
+  // Only nested waves may adopt the context admitted by the outer workflow.
+  // Initial skill invocations must not inherit a previous standalone run by accident.
+  const admitted = path.join(cwd, '.specrails', 'pipeline-context.json')
+  const env = parsedArgs.roleWaveFile !== undefined && !inputEnv.SPECRAILS_EXECUTION_CONTEXT && existsSync(admitted)
+    ? { ...inputEnv, SPECRAILS_EXECUTION_CONTEXT: admitted } : inputEnv
+  dependencies = { ...dependencies, env: resolvePipelineEnvironment(cwd, env) }
   const scriptPath = dependencies.scriptPath ?? process.argv[1]
   const providerRoot = resolveProviderRoot(scriptPath)
   const writeOutput =
@@ -2387,11 +2426,18 @@ export async function runSkillCli(argv, dependencies = {}) {
 
 async function runRoleWave(wave, dependencies) {
   const sourceEnv = dependencies.env ?? process.env
-  const repositoryCwd =
-    nonEmptyString(sourceEnv.SPECRAILS_REPO_DIR) ?? dependencies.cwd
   const inheritedProfile = nonEmptyString(
     sourceEnv.SPECRAILS_PROFILE_PATH,
   )
+  const contextPath = nonEmptyString(sourceEnv.SPECRAILS_EXECUTION_CONTEXT)
+  const executionContext = contextPath ? JSON.parse(readFileSync(contextPath, 'utf8')) : undefined
+  const repositoryCwd = nonEmptyString(sourceEnv.SPECRAILS_REPO_DIR) ??
+    executionContext?.artifactRoot ?? dependencies.cwd
+  if (executionContext) {
+    if (executionContext.ownership?.worktrees === 'host' && wave.roles.some((role) => role.workspace !== 'current')) {
+      throw new RunnerUsageError('Host-owned execution must use current repositories; sibling worktrees are not allowed')
+    }
+  }
   const materialized = materializeRoleWaveWorkspaces(wave, {
     cwd: repositoryCwd,
     providerRoot: dependencies.providerRoot,
@@ -2440,6 +2486,9 @@ async function runRoleWave(wave, dependencies) {
                 new Set([
                   ...wave.additionalDirs,
                   materialized.baseRepo,
+                  ...(executionContext?.repositories ?? []).map((repository) => repository.path),
+                  sourceEnv.SPECRAILS_BACKLOG_ROOT,
+                  ...(contextPath ? [path.dirname(contextPath)] : []),
                 ]),
               ),
               attachmentPaths: [],

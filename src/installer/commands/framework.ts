@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { assertNoCoreDowngrade, currentFrameworkVersion, withFrameworkLifecycleLock } from '../util/install-transaction.js'
 import { InstallerError } from '../util/errors.js'
 import { ok, step } from '../util/logger.js'
 import { pathExists, readTextFile } from '../util/fs.js'
@@ -169,7 +170,11 @@ export async function runInstallFramework(
   const provider = parseProvider(flags.provider)
   const version = parseFrameworkVersion(flags.version)
   const { providerDir } = derivedPaths(provider)
+  const packageVersion = readPackageVersion(scriptDir)
+  if (packageVersion !== version) throw new InstallerError(`Core package ${packageVersion} cannot materialize framework ${version}; use the matching package version.`, 41)
 
+  return withFrameworkLifecycleLock(frameworkDir, () => {
+  assertNoCoreDowngrade(currentFrameworkVersion(frameworkDir), version)
   const swapCurrent = flags['no-swap'] !== true
   step(`Materializing framework ${version} (${provider}) → ${frameworkDir}`)
   ensureFramework({
@@ -187,6 +192,7 @@ export async function runInstallFramework(
   }
 
   return { frameworkDir, provider, version, providerDir, swapped: swapCurrent }
+  })
 }
 
 /**
@@ -199,6 +205,7 @@ export async function runSwapCurrent(flags: SwapCurrentFlags): Promise<SwapCurre
   const frameworkDir = path.resolve(requireString(flags['framework-dir'], 'framework-dir'))
   const version = parseFrameworkVersion(flags.version)
   const requested = parseProviders(flags.providers)
+  return withFrameworkLifecycleLock(frameworkDir, () => {
   const required = resolveRequiredFrameworkProviders({
     frameworkDir,
     requested,
@@ -209,6 +216,7 @@ export async function runSwapCurrent(flags: SwapCurrentFlags): Promise<SwapCurre
   ensureCurrentSymlink(frameworkDir, version)
   ok(`current → ${version} (${providers.join(', ')})`)
   return { frameworkDir, version, providers }
+  })
 }
 
 /**
@@ -225,10 +233,13 @@ export async function runAssemble(flags: AssembleFlags): Promise<AssembleOutcome
   const codeRoot = path.resolve(requireString(flags['code-root'], 'code-root'))
   const { providerDir } = derivedPaths(provider)
 
+  return withFrameworkLifecycleLock(frameworkDir, () => {
   // Defence-in-depth: the framework must be materialized + `current` pointed at
   // `<version>` BEFORE assemble can link from it. The desktop FrameworkManager
   // always calls install-framework first; this guard surfaces a clear error if
   // a caller skips it.
+  const activeVersion = currentFrameworkVersion(frameworkDir)
+  if (activeVersion && activeVersion !== version) throw new InstallerError(`Framework current is ${activeVersion}, not requested ${version}; refusing to write an inaccurate project version.`, 41)
   const currentProviderDir = path.join(frameworkDir, 'current', providerDir)
   if (!pathExists(currentProviderDir)) {
     throw new InstallerError(
@@ -236,6 +247,8 @@ export async function runAssemble(flags: AssembleFlags): Promise<AssembleOutcome
       41,
     )
   }
+
+  assertFrameworkVersionComplete(frameworkDir, version, [provider])
 
   const selectedAgentsFlag = flags['selected-agents']
   const selectedAgents =
@@ -257,6 +270,7 @@ export async function runAssemble(flags: AssembleFlags): Promise<AssembleOutcome
   ok(`Linked ${providerDir}/ from framework ${version} + seeded project layer`)
 
   return { workspace, frameworkDir, provider, version, codeRoot, providerDir }
+  })
 }
 
 /** Read the package version (the version the desktop should materialize). */
