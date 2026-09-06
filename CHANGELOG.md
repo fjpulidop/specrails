@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.1.0](https://github.com/fjpulidop/specrails-core/compare/v5.0.0...v5.1.0) (2026-09-06)
+
+
+### Features
+
+* make provider pipelines and Core updates reliable ([#334](https://github.com/fjpulidop/specrails-core/issues/334)) ([f3abc04](https://github.com/fjpulidop/specrails-core/commit/f3abc043510dc928abee30f54f8496c907149ad1))
+
 ## [5.0.0](https://github.com/fjpulidop/specrails-core/compare/v4.12.0...v5.0.0) (2026-07-21)
 
 
