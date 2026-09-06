@@ -119,8 +119,11 @@ export async function withInstallRollback<T>(paths: string[], apply: () => Promi
             mkdirSync(path.dirname(row.target), { recursive: true })
             cpSync(row.saved, row.target, {
               recursive: true, dereference: false, verbatimSymlinks: true,
+              // Node 20 on Windows passes namespaced paths (\\?\) to
+              // cpSync filters; newer releases may pass ordinary paths. Put
+              // both operands in the same namespace before checking ownership.
               filter: (source) => !isReservedPath(
-                [relative, path.relative(row.saved, source).split(path.sep).join('/')].filter(Boolean).join('/'),
+                [relative, path.relative(path.toNamespacedPath(row.saved), path.toNamespacedPath(source)).split(path.sep).join('/')].filter(Boolean).join('/'),
               ),
             })
           }

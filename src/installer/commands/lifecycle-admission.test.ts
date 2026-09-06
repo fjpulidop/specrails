@@ -94,23 +94,29 @@ describe('framework lifecycle admission', () => {
     })
   })
 
-  it('preserves live custom changes, new custom files and deliberate deletions during rollback', async () => {
-    const provider = path.join(repo, '.claude')
-    const agents = path.join(provider, 'agents')
-    file(path.join(agents, 'sr-developer.md'), 'old managed')
-    file(path.join(agents, 'custom-edited.md'), 'old custom')
-    file(path.join(agents, 'custom-deleted.md'), 'deleted by user')
+  it.each([
+    ['.claude', 'agents'],
+    ['.kimi-code', 'skills'],
+    ['.kimi-code', 'skills/rails'],
+    ['.specrails', 'profiles'],
+  ])('preserves live reserved changes, new files and deliberate deletions during rollback of %s/%s', async (providerName, reservedDirectory) => {
+    const provider = path.join(repo, providerName)
+    const reserved = path.join(provider, reservedDirectory)
+    const managed = path.join(provider, 'managed.txt')
+    file(managed, 'old managed')
+    file(path.join(reserved, 'custom-edited.md'), 'old custom')
+    file(path.join(reserved, 'custom-deleted.md'), 'deleted by user')
     await expect(withInstallRollback([provider], async () => {
-      file(path.join(agents, 'sr-developer.md'), 'new managed')
-      file(path.join(agents, 'custom-edited.md'), 'new custom')
-      file(path.join(agents, 'custom-created.md'), 'created while awaiting')
-      rmSync(path.join(agents, 'custom-deleted.md'))
+      file(managed, 'new managed')
+      file(path.join(reserved, 'custom-edited.md'), 'new custom')
+      file(path.join(reserved, 'custom-created.md'), 'created while awaiting')
+      rmSync(path.join(reserved, 'custom-deleted.md'))
       throw new Error('fixture failure')
     })).rejects.toThrow('fixture failure')
-    expect(readFileSync(path.join(agents, 'sr-developer.md'), 'utf8')).toBe('old managed')
-    expect(readFileSync(path.join(agents, 'custom-edited.md'), 'utf8')).toBe('new custom')
-    expect(readFileSync(path.join(agents, 'custom-created.md'), 'utf8')).toBe('created while awaiting')
-    expect(existsSync(path.join(agents, 'custom-deleted.md'))).toBe(false)
+    expect(readFileSync(managed, 'utf8')).toBe('old managed')
+    expect(readFileSync(path.join(reserved, 'custom-edited.md'), 'utf8')).toBe('new custom')
+    expect(readFileSync(path.join(reserved, 'custom-created.md'), 'utf8')).toBe('created while awaiting')
+    expect(existsSync(path.join(reserved, 'custom-deleted.md'))).toBe(false)
   })
 
   it('never removes a replacement owner when finishing an operation', async () => {

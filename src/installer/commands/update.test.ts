@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -330,8 +330,42 @@ describe('runUpdate', () => {
       mkdirp(path.join(workspaceFor(repoRoot), '.gemini', 'commands', 'specrails'))
       process.env.SPECRAILS_CORE_SCRIPT_DIR = scriptDir
 
-      const result = await runUpdate({ 'root-dir': repoRoot, provider: 'gemini' })
-      expect(result.provider).toBe('gemini')
+      // Keep the real child-process and skill-normalization path, but do not
+      // let this provider-selection regression download OpenSpec via npx.
+      const invocationLog = path.join(tmpDir, 'openspec-invocation.json')
+      const openspecCli = path.join(tmpDir, 'local openspec fixture.mjs')
+      writeFileLf(openspecCli, `
+import fs from 'node:fs'
+import path from 'node:path'
+const args = process.argv.slice(2)
+fs.writeFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args))
+if (args[0] !== 'init' || args[1] !== '--tools' || args[2] !== 'gemini') {
+  throw new Error('Unexpected OpenSpec invocation')
+}
+for (const skill of ${JSON.stringify(KIMI_REQUIRED_OPENSPEC_SKILLS)}) {
+  const directory = path.join(args.at(-1), '.gemini', 'skills', skill)
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'SKILL.md'), 'generated:' + skill + String.fromCharCode(10))
+}
+`)
+      vi.stubEnv('SPECRAILS_OPENSPEC_NODE', process.execPath)
+      vi.stubEnv('SPECRAILS_OPENSPEC_BIN', openspecCli)
+      vi.stubEnv('SPECRAILS_SKIP_OPENSPEC_INIT', '0')
+      try {
+        const result = await runUpdate({ 'root-dir': repoRoot, provider: 'gemini' })
+        expect(result.provider).toBe('gemini')
+        expect(JSON.parse(readTextFile(invocationLog))).toEqual([
+          'init', '--tools', 'gemini', '--profile', 'custom', realpathSync(repoRoot),
+        ])
+        const artifactRoot = workspaceFor(repoRoot)
+        for (const skill of KIMI_REQUIRED_OPENSPEC_SKILLS) {
+          expect(readTextFile(path.join(artifactRoot, '.gemini', 'skills', skill, 'SKILL.md')))
+            .toBe(`generated:${skill}\n`)
+          expect(pathExists(path.join(repoRoot, '.gemini', 'skills', skill))).toBe(false)
+        }
+      } finally {
+        vi.unstubAllEnvs()
+      }
     })
 
     it('adds and refreshes Kimi without altering another provider or user-owned Kimi files', async () => {
