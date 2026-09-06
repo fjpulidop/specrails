@@ -1,4 +1,4 @@
-import { closeSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { realpathSync as requireRealpath } from 'node:fs'
 import os from 'node:os'
@@ -108,7 +108,9 @@ export async function withInstallRollback<T>(paths: string[], apply: () => Promi
   const snapshots = [...new Set(paths)].map((target, index) => ({ target, saved: path.join(backup, String(index)), present: exists(target) }))
   let retainBackup = false
   try {
-    for (const row of snapshots) if (row.present) cpSync(row.target, row.saved, { recursive: true, dereference: false, verbatimSymlinks: true })
+    // Snapshot destinations are new: keep traversal in JS to avoid Node 22's
+    // native Unicode directory-copy defect on Windows (nodejs/node#61878).
+    for (const row of snapshots) if (row.present) cpSync(row.target, row.saved, { recursive: true, dereference: false, verbatimSymlinks: true, filter: () => true, mode: constants.COPYFILE_FICLONE })
     try { return await apply() } catch (error) {
       const failures: string[] = []
       for (const row of [...snapshots].reverse()) {
@@ -118,7 +120,7 @@ export async function withInstallRollback<T>(paths: string[], apply: () => Promi
           if (row.present) {
             mkdirSync(path.dirname(row.target), { recursive: true })
             cpSync(row.saved, row.target, {
-              recursive: true, dereference: false, verbatimSymlinks: true,
+              recursive: true, dereference: false, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE,
               // Node 20 on Windows passes namespaced paths (\\?\) to
               // cpSync filters; newer releases may pass ordinary paths. Put
               // both operands in the same namespace before checking ownership.

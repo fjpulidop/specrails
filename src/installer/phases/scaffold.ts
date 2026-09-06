@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { cpSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
+import { constants, cpSync, mkdtempSync, renameSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -687,7 +687,9 @@ export function installFramework(input: InstallFrameworkInput): InstallFramework
   const stagedStampPath = frameworkStampPath(stagedVersionDir, input.providerDir)
   try {
     // Preserve all sibling providers while rebuilding the requested provider.
-    if (isDir(versionDir)) cpSync(versionDir, stagedVersionDir, { recursive: true, dereference: false, verbatimSymlinks: true })
+    // The stage is new: JS traversal keeps these copies away from Node 22's
+    // native Unicode directory-copy defect on Windows (nodejs/node#61878).
+    if (isDir(versionDir)) cpSync(versionDir, stagedVersionDir, { recursive: true, dereference: false, verbatimSymlinks: true, filter: () => true, mode: constants.COPYFILE_FICLONE })
     else mkdirp(stagedVersionDir)
   // Framework provider trees are entirely Core-owned. Rebuilding from a clean
   // destination removes stale files as well as repairing corrupt/missing ones,

@@ -119,6 +119,21 @@ describe('framework lifecycle admission', () => {
     expect(existsSync(path.join(reserved, 'custom-deleted.md'))).toBe(false)
   })
 
+  it('restores managed Unicode trees while preserving live custom edits after failure', async () => {
+    const provider = path.join(root, 'José User Home', 'Proyecto español', '.claude')
+    const managed = path.join(provider, 'Guía', '契約.md')
+    const custom = path.join(provider, 'agents', 'custom-español.md')
+    file(managed, 'original managed Unicode bytes')
+    file(custom, 'original custom bytes')
+    await expect(withInstallRollback([provider], async () => {
+      file(managed, 'failed replacement')
+      file(custom, 'new user-authored bytes')
+      throw new Error('Unicode update fixture failed')
+    })).rejects.toThrow('Unicode update fixture failed')
+    expect(readFileSync(managed, 'utf8')).toBe('original managed Unicode bytes')
+    expect(readFileSync(custom, 'utf8')).toBe('new user-authored bytes')
+  })
+
   it('never removes a replacement owner when finishing an operation', async () => {
     const lock = frameworkLifecycleLockPath(framework)
     await withFrameworkLifecycleLock(framework, () => file(lock, 'replacement-owner'))
